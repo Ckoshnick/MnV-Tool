@@ -2,8 +2,14 @@
 __pycache__/
 data/
 hide me/
+reMnV test/
+Old version archive/
+ACE MnV/
+Opportunities Log M&V
 
 #Data Files
 *.pk1
+*.pdf
 *.xlsx
 *.docx
+*.ipynb
