@@ -1,0 +1,172 @@
+---
+title: "MnV Walkthrough"
+author:  Josue Aleman,  jaleman@ucdavis.edu
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+header-includes:
+  \usepackage{float}
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+\pagebreak[4]
+
+
+# Step 1
+
+Login on the Airtable and click on the **[Opportunities Log](https://airtable.com/tblF4fLVy7G0lC9F8) ** tab. Select one of the entries under **Traditional Energy Model M&V** as seen in *Figure *\ref{fig:fig1}.
+```{r fig1, echo=FALSE, fig.cap="Traditional Energy Model MnV\\label{fig:fig1}", out.width = '50%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/step1")
+```
+
+
+# Step 2 
+
+Scroll to the right of the columns until you find *Unique ID* as seen in *Figure *\ref{fig:fig2}. 
+
+```{r fig2, echo=FALSE, fig.cap="Unique ID\\label{fig:fig2}", out.width = '70%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig2")
+```
+
+
+
+# Step 3
+
+Go to the Jupyter notebook following the path **/ UCD_ECO_coding / MnV-Tool/ ACE MnV** and make make a duplicate of **DC MnV v14-New.ipynb** notebook. Rename it as **{Building Name}\_{Unique ID}\_{Commodity}** as seen in *Figure *\ref{fig:fig3}.
+
+```{r fig3, echo=FALSE, fig.cap="Notebook for Opportunity\\label{fig:fig3}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig3")
+```
+
+
+
+# Step 4
+
+Ensure that the path to mypy folder and the MnV tool are correct (As seen in *Figure *\ref{fig:fig4}) before running the cell. Once boht paths have been added hit **Cmd + [Return]** for Mac or **Ctrl + [Enter]** for Windows to run the cell. 
+
+```{r fig4, echo=FALSE, fig.cap="Notebook for Opportunity\\label{fig:fig4}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig4")
+```
+
+
+# Step 5
+
+Go to the **Pi Data Loading** cell and ensure you search for the correct building and keep *demand_kbtu* to search for the right tag. Wild cards (\*) are valid to help search for the tags. Once you have that field correct run the cell (see step 4 on how to run cell). The tags available will be printed out under the cell as seen in *Figure *\ref{fig:fig5}. 
+
+```{r fig5, echo=FALSE, fig.cap="Notebook for Opportunity\\label{fig:fig5}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig5")
+```
+
+
+
+# Step 6
+
+Go back to the **Opportunities Log** and look for the column *Date issue resolved* and save that date as it will be useful in determining how much data to extract from PI as seen in *Figure *\ref{fig:fig6}. 
+
+```{r fig6, echo=FALSE, fig.cap="Notebook for Opportunity\\label{fig:fig6}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig6")
+```
+
+
+
+# Step 7
+
+In the notebook, go to the cell called **Pull tags** and select a start date that is at least one year before the *Date issue resolved*. To keep the end date to today's date use the "\*". The parameter *interval* should be "1 hour" and the parameter *calculation* should be "calculated" for these models. Run the cell and ensure that you have the right amount of Repsonses as seen in *Figure *\ref{fig:fig7}. 
+
+```{r fig7, echo=FALSE, fig.cap="Pulling Data From PI\\label{fig:fig7}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig7")
+```
+
+
+
+# Step 8
+
+To get a glimpse of the data run the **data.head()** cell,  this will display the first five rows of the data. As seen in *Figure *\ref{fig:fig8} each column is a tag and each row index is the timestamp. 
+
+```{r fig8, echo=FALSE, fig.cap="Pulling Data From PI\\label{fig:fig8}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig8")
+```
+
+
+# Step 9
+
+Go to the **Data Section** cell and ensure the parameters are correct. Under *column* type the column number you wish to run (remember that is is 0 based meaning that the column numbers begin with 0). *IQRmult* should typically be in the range of **3 - 4** depending on how much we may need to exclude and consider outliers. *IQR*, *resampleRate*, *OATsource*, *OATname*, *sliceType*, and *midDate* should remain as the values alrerady listed. Lastly, *dateRanges* should be **['Date Start Pre', 'Date End Pre', 'Date Start Post', 'Date End Post' ]** all in the format of **YYYY-MM-DD** shown in *Figure *\ref{fig:fig9}. Run the cell to display the various plots shown in  *Figure *\ref{fig:fig10} and *Figure *\ref{fig:fig11}. For a deeper understanding on the various plots please consult the data science team. 
+
+```{r fig9, echo=FALSE, fig.cap="Data Section Cell\\label{fig:fig9}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig9")
+```
+
+```{r fig10, echo=FALSE, fig.cap="Results of Evaluation and Outlier Plot\\label{fig:fig10}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig10")
+```
+
+```{r fig11, echo=FALSE, fig.cap="Outlier Resample and Pre and Post Period\\label{fig:fig11}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig11")
+```
+
+
+
+# Step 10
+
+Once you have ensure that the data and plots look correct proceed to the **Many Linear Models** cell. The only parameter that will need to change is the *commodityRate*. To uncomment the right commodity rate, delete the "#" that is before the desired rate. Remember to only have one commodityRate uncommented, making sure the other rates have the "#" before it as shown in *Figure *\ref{fig:fig12}. You may also select how many results  you want to see by changing the *allmod.statsPool[0:5]* to a different range. To view more plots of the top results you may also change the *allmod.plot_pool(1)* to the number of plots you want to see. Once you have the right rate, run the cell which will output the summary of the models as seen in *Figure *\ref{fig:fig13}. As a rule of thumb, a good model will have an **AR2** (Adjusted $R^2$) value that is **greater** than 0.75 and a **cvrmse** (Coefficient of Variation Root Mean Squared Error) value **less** than 0.3. If the top choice does not meet these requirements please consult the data science team for evaluation. 
+
+```{r fig12, echo=FALSE, fig.cap="Many Linear Models\\label{fig:fig12}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig12")
+
+```
+
+```{r fig13, echo=FALSE, fig.cap="Many Linear Models Pt 2\\label{fig:fig13}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig13")
+```
+
+# Step 11
+
+Run the **Single Linear Model** to run a *KFold* as a mean of ensuring that the predictions we are making in *Step 10* are accurate. Once again consult the data science team for further explanation on the plots and the data that is printed.
+
+
+# Step 12
+
+Go to the **Savings** cell and run it. It will display the amount of savings that were made due to the fix in the opportunity as seen in *Figure *\ref{fig:fig14}. The first plot displays the actual usage during the post period (black solid line) and the predicted usage if the fix had not been made (dotted purple line). The second plot shows the positive savings (black dots) and the potential loss (red dots). Lastly, the third plot shows the cummulative savings up to today's date. 
+
+```{r fig14, echo=FALSE, fig.cap="Savings Plots\\label{fig:fig14}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig14")
+```
+
+
+# Step 13
+
+Run the cell which contains the "Estimated Annual Savings" to view how would be saved durign the fiscal year due to the fix as seen in *Figure *\ref{fig:fig15}. 
+
+```{r fig15, echo=FALSE, fig.cap="Estimated Annual Savings\\label{fig:fig15}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig15")
+```
+
+
+
+# Step 14
+
+Go back to the **Opportunites Log** and copy the field entry name as displayed in *Figure *\ref{fig:fig16}. Paste the copied entry into the *Total Savings* tab under **Opportunity & Commodity** column. Fill out the **Commodity & Unit**, **Commodity & Savings** and **Opportunity Item** columns as seen in *Figure *\ref{fig:fig17}. Continue filling out the **Adjusted R-Squared**, **CVRMSE** columns (From the top AR2 result in the Many Linear Models shown in *Figure *\ref{fig:fig13}). The **Start Date** column will contain the date of the Start Post Period and the **Date of Modeled Savings** column will contain the End Post Period date. The **Actual FY 17-18 Savings** column should have the number from the **Savings** cell in *Figure *\ref{fig:fig14}. Lastly, the **Projected FY 17-18 Savings..** column should have the number from the **Estimated Annual Savings** cell shown in *Figure *\ref{fig:fig15}. 
+
+```{r fig16, echo=FALSE, fig.cap="Opportunities Log\\label{fig:fig16}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig16")
+```
+
+```{r fig17, echo=FALSE, fig.cap="Total Savings Tab\\label{fig:fig17}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig17")
+```
+
+```{r fig18, echo=FALSE, fig.cap="AR2, CVRMSE, Start/End Post Period\\label{fig:fig18}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig18")
+```
+
+```{r fig19, echo=FALSE, fig.cap="Actual/Projected Savings\\label{fig:fig19}", out.width = '100%', fig.align="center"}
+knitr::include_graphics("/Users/josuealeman/Desktop/fig19")
