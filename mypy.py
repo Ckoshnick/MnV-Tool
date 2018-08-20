@@ -909,7 +909,7 @@ def merge_oat(df, source='masterfile', choose=None):
         print('its a df!')
         if df.empty:
             print('its empty too!')
-            oatPath = path.join(path_prefix, 'data/OATmaster.csv')
+            oatPath = path.join(path_prefix, 'OATmaster.csv')
             OAT = pd.read_csv(oatPath, index_col=0, parse_dates=True,
                               infer_datetime_format=True)
             return OAT
@@ -920,7 +920,7 @@ def merge_oat(df, source='masterfile', choose=None):
 
     # Load data and pd.merge()
     if source == 'masterfile':
-        oatPath = path.join(path_prefix, 'data/OATmaster.csv')
+        oatPath = path.join(path_prefix, 'OATmaster.csv')
         print('Pulling data from: {}'.format(oatPath))
 
         OAT = pd.read_csv(oatPath, index_col=0, parse_dates=True,
@@ -951,7 +951,7 @@ def calculate_degree_days(oatData=None, by='day', cutoff=65):
         print('OAT supplied with df')
     else:
         print('OAT being loaded from master file')
-        oatPath = path.join(path_prefix, 'data/OATmaster.csv')
+        oatPath = path.join(path_prefix, 'OATmaster.csv')
 
         df = pd.read_csv(oatPath, index_col=0, parse_dates=True,
                          infer_datetime_format=True)
@@ -1033,7 +1033,7 @@ def calculate_degree_hours(oatData=None, by='day', cutoff=65):
         print('OAT supplied with df')
     else:
         print('OAT being loaded from master file')
-        oatPath = path.join(path_prefix, 'data/OATmaster.csv')
+        oatPath = path.join(path_prefix, 'OATmaster.csv')
 
         df = pd.read_csv(oatPath, index_col=0, parse_dates=True,
                          infer_datetime_format=True)
