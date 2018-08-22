@@ -374,7 +374,7 @@ class pi_client(object):
 
             # counts the elements
             n_elem = len(js["Items"])
-            summary_dic = {}
+            #summary_dic = {}
             timeseries = {}
             
             sumType = js["Items"][0]['Type'] # first value for sumType == "All"
