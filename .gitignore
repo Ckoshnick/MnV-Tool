@@ -1,6 +1,7 @@
 #Directories
 __pycache__/
 data/
+FY 2018-2019/
 hide me/
 reMnV test/
 Old version archive/
@@ -13,3 +14,4 @@ Opportunities Log M&V
 *.xlsx
 *.docx
 *.ipynb
+*.json

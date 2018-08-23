@@ -5,152 +5,370 @@ Created on Wed Apr 04 10:07:41 2018
 @author: koshnick
 
 Last update 5/14/18 - koshnick
-Added Params subclass to data container. Refactored code to fit new convention
+Added Params subclass to data keeper. Refactored code to fit new convention
 Next time - need to add internal functions to _convention.
 
+v1.2 6/12/2017
+
+- remove postCalc graph from model_plot() since this plot is not needed to eval
+    uate the quality of the model. postCalc plot now shown in savings plot.
+- added cvrmse stat as mod.Fit.cvrmse
+- removed MSE from stats_pool (in favor of cvrmse)
+- added calculate_vif function and stored result under mod.vif
+- Fixed the ability to use OAT within the same dataset, however it is clunky
+- Added custom markersize variable for savings plot
+- Added ModelParameters class to allow for a modelDict input for the ols_model
+    class
+
+known issues:
+- Something in the cleaning step or outlier plotting has become very slow and
+    needs optimizing [I think its the OAT loader, has needed help anyways]
+- coloration for plots is lacking
+- Something happening where "CDH" or "HDH + CDH" wont run without a time var
+- Imrpove OAT loader, and self OAT data
+
+v1.3 6/25/2017
+- updated plot colors / options / formatting
+- updated docstrings
+- resolved issue of slow OAT data loading in mypy library
+- resolved issue of CDH failing with no time variable
+- Added Kfold function and two reporting styles (absolute MSE and relative)
+
+v1.3 6/28/2017
+
+ols_model changes:
+- Fixed deprecation warning for calculate_degree_days()
+- changed old paramList to paramPermuteList (for many_ols)
+- added paramList and paramString to ols_model
+- added function to convert paramString to paramList and vica versa
+- updated inputDict to reflect above changes
+- updated VIF functinon to use paramList which simplifies function greatly
+- removed get_columns_from_params() as this function is now obsolete
+- removed get_dummy_strings() as this function is now obsolete
+- created _remove_degree_days()
+- removed function k_test() as it was unfinished and unused
+- removed function make_param_string() as this function is now obsolete
+- removed function show() as it was unfinished and unused
+- Fixed issue where calculate_vif() would throw error
+    "MissingDataError: exog contains inf or nans" .The OAT data was creating
+    HDH/CDH values which were nan and causing this error
+
+v1.4 8/__/2018
+- Updated Kfold and split_test_train so now the train and test for the main
+    model are identical to fold 0 in the Kfold analysis. Added variable
+    self._folds that is a collection of indicies generated from sklearn KFold()
+    This is used to now generate test_train, and reused to calc the Kfold stats
+- Fixed conversion of paramList to paramString in ols_model's
+     __init__. It was formerly dropping HDH CDH HDH2 and CDH2
+- Changed _outliter_plot to be similar to other plotting functions where the
+    outlier data is now stored in its own variable of the data keeper class
+    so that it can be called upon later, and not within the remove_outlier
+    function
+
+- added resampled_plot() so that the workaround to use the old _outlier_plot()
+    as a method to see the data after resampling is no longer needed. Just
+    call resampled_plot() to see the data being fed into data_slice()
+- made a change so that all plot objects are stored as self. <variable>
+    so they plots can be recalled to be saved in the archiving function
+- added try - except clauses to functions where dict.iteritems() for py27 was
+    causing conflict in py36. Now the except class uses dict.items() for py36
+
+
+-Added archiving feature to the parent class. This archive saves the following
+
+    As an excel file:
+    results of the VIF caluculation
+    kfold calculations
+    mod.Fit.summary() object
+
+    As an excel file:
+        dk.rawData - for loading into reModel notebook
+
+    As .png files:
+    relevant plots for reporting
+
+    As a .json:
+    parameters to re-run models
+
+    needs:
+        - saving all data as a pdf report
+        - a way to communicate with the larger archive
+
+- Renamed the data_handler class to data_keeper (dk in future instances)
+- Disabled the "undo" function since we're not using the CLI that was planned
+- Removed date and name from data_keeper class since they were intended for
+    archiving, but archiving is being done sperately now
+- changed data_keeper functionality to allow any size dataframe to be passed in
+    as the 'data' variable a new parameter is now needed to pass an index or
+    column name to select the col that will be selected as self.ModifiedData
+- Added the remodel class to allow saved models to be reloaded and updated with
+    new PI data. Revisiaulzied, and saved
+- Added work around in _resample function to make the issues where
+    sum([nan, nan]) = 0 and mean([nan, nan]) = nan were causing issues that
+    added several erroneous zeros into the dataset.
+    This removes the following from known issues:
+ X removing a full day of outliers will cause a value of 0 to appear when
+    that day is resampled, becuase the date axis will be filled with the
+    missing day, and the value will be set to zero. maybe resample has an
+    option to change this behavior
+
+---- MOVING TO GITHUB ALL FUTURE CHANGES WILL BE RECORDED THERE ----
+
+
+known issues:
+    - TODO: Fix doc strings containing "exhautive numpydoc format docstring."
+    - Models are limited to "D" or "H" resampled due to the implementation in
+        how OAT is turned into degree days (eg can not do a 3hr long interval)
+
+
+
+Last update 8/2/18 - koshnick
 """
 
-import sys
+# import sys
 import math
-import mypy
+import json
 import itertools
+import scipy.stats
 
 import numpy as np
 import pandas as pd
-
 import seaborn as sns
+
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import statsmodels.formula.api as smf
 
 from os import path
+from os import mkdir
+from math import sqrt
+from shutil import copyfile
 from datetime import datetime
-from sklearn import linear_model
-from matplotlib.gridspec import GridSpec
-from sklearn.model_selection import train_test_split, KFold
-from sklearn.metrics import mean_squared_error, r2_score
+from PI_client import pi_client
 
-#path_prefix = path.dirname(path.abspath(__file__))
+from sklearn.model_selection import KFold
+from statsmodels.tools.tools import add_constant
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+# from sklearn.metrics import mean_squared_error, r2_score
 
-sys.path.append('../../mypy')
+pathPrefix = path.dirname(path.abspath(__file__))
+
 plt.rcParams.update({'figure.max_open_warning': 0})
+sns.set()  # Enable to turn on seaborn plotting
+
+# TODO: Get rid of the figW global - move else where?
+# TODO: Trim more imports for speed Import specific functions instead of whole
+# modules
 
 figW = 18
 figH = 6
 
-class data_handler():
+version = 'Version 1.5'
+
+class DataParameters():
+
     """
-    input **kwargs
-    inputDict = {'IQRmult' : 3.0,
-                 'IQR' : 'y',
-                 'floor': 0,
-                 'ceiling': 10000,
+    A simple class to store attributes for the data_keeper class. The __init__
+    function is specially formated for the data_keeper class and takes in a
+    **kwargs dictionary to populate the parameters. All parameters have default
+    values, but can be modified in **kwargs.
 
-                 'resampleRate' : 'D',
-                 'verbosity' : 2,
-                 'sliceType' : 'half', #half, middate, ranges
-                 'midDate' : None, #only needed with sliceType : 'middate'
-                 'dateRanges' : ['20--','20--','20--','20--'], #required for 'ranges'
-                 'OATname' : None,
-                 'OATsource' : 'file'}
+    Parameters
+    ----------
+    **inputDict : dict
+        each entry in the dictionary should map to a variable in the __init__
+
+    inputDict = {
+         'column': 0
+         'IQRmult' : 3.0,
+         'IQR' : 'y',
+         'floor': -1,
+         'ceiling': 10000,
+
+         'resampleRate' : 'D',
+         'sliceType' : 'half', #half, middate, ranges
+         'midDate' : None, #only needed with sliceType : 'middate'
+         'dateRanges' : None #required for 'ranges'
+         'OATsource' : 'file',
+         'OATname' : None}
+
+    column : int or str (0)
+        if str - name of column to select if int - column index
+    IQRmult : float (3.0)
+        Number that the IQR will be bultiplied by to adjust floor/ceiling
+        see self.remove_outliers() function
+    IQR : str ('y')
+        if IQR == 'y' then the outlier detection will use IQR method
+        see self.remove_outliers() function
+    floor : int (-1)
+        Lowest value any raw data point should take on
+        see self.remove_outliers() function
+    ceiling : int (10000)
+        Maximum value any raw data point should take on
+        see self.remove_outliers() function
+    resampleRate : 'intstr ('D')
+        The resampling rate that will be impressed upon the data before passing
+        the data off to the modeling class
+    sliceType : str ('half')
+        options are -half, middate, ranges- see self.data_slice() function
+    midDate : str (None)
+        'yyyy-mm-dd' formatted date, used for sliceType = 'middate'
+    'dateRanges' : list (None)
+        ['yyyy-mm-dd'] x4 dates used for sliceType = 'ranges'
+        see self.data_slice() function for details
+    'OATsource' : str ('file')
+        Defines the source of the OAT data for calculating HDH/CDH
+        see self.add_degree_hours() for details
+    'OATname' : str
+        The name of the OAT column for calculating HDH/CDH when the OAT is
+        supplied along with the data. This option is only needed if OATsource =
+        'self'
+        see self.add_degree_hours() for details
+
+    Returns
+    -------
+    class instance
+        instance.attibutes
+
+    Raises
+    ------
+    None
+
     """
 
+    def __init__(self,
+                 column=0,
+                 IQRmult=3,
+                 IQR='y',
+                 modifiedDataInterval=None,
+                 floor=-1,
+                 ceiling=10000,
+                 resampleRate='D',
+                 sliceType='half',
+                 midDate=None,
+                 dateRanges=None,
+                 OATsource='file',
+                 OATname=None):
 
-    class parameters():
-        # Params Init
-        def __init__(self,
-                 IQRmult = 3,
-                 IQR = 'y',
-                 floor = 0,
-                 ceiling = 10000,
-                 resampleRate = 'D',
-                 verbosity = 2,
-                 sliceType = 'half',
-                 midDate = None,
-                 dateRanges = None,
-                 OATsource = 'file',
-                 OATname = None):
+        self.column = column
+        self.modifiedDataInterval = None
+        self.OATsource = OATsource
+        self.floor = floor
+        self.ceiling = ceiling
+        self.IQR = IQR
+        self.IQRmult = IQRmult
+        self.resampleRate = resampleRate
+        self.sliceType = sliceType
+        self.midDate = midDate
+        self.dateRanges = dateRanges
+        self.OATname = OATname
 
-            self.OATsource = OATsource
-            self.floor = floor
-            self.ceiling = ceiling
-            self.IQR = IQR
-            self.IQRmult = IQRmult
-            self.resampleRate = resampleRate
-            self.sliceType = sliceType
-            self.midDate = midDate
-            self.dateRanges = dateRanges
-            self.verbosity = verbosity #Verbosity of outputs (plots and stats, 0-4)
-            self.OATname = OATname
+    def show_params(self):
+        """ Display the key, value pairs of the parmeters in this class"""
+        for k, v in self.__dict__.iteritems():
+            print(k, v)
 
-        def show(self):
-            for k,v in self.__dict__.iteritems():
-                print(k,v)
 
+class data_keeper():
+
+    """
+    Multipurpose data cleaning class. Designed to take in a pd.DataFrame,
+    modify it in several ways, cut the data, and pass it off for MnV modeling.
+
+    Parameters
+    ----------
+    data : pd.DataFrame or pd.Series
+        Timeseries data
+    inputDict : dict
+        **kwargs type dict to be passed into the DataParameters class
+
+    Returns
+    -------
+    instance: dk
+
+        notable attributes
+        ------------------
+        dk.raw - raw data DataFrame
+        dk.modifiedData - working data DataFrame
+        dk.restoreData - a copy made before modifiedData is changed # disabled
+        dk.pre - pre period DataFrame created by data_slice()
+        dk.post - post period DataFrame created by  data_slice()
+
+    """
 
     # Data Class init
     def __init__(self, data, inputDict=None):
+        # instantiate params
+        self.params = DataParameters(**inputDict)
+        self.params.modifiedDataInterval = 'raw'
 
-        self.params = self.parameters(**inputDict)
+        # Allow for pd.series or pd.dataframe to be loaded. In the case of a
+        # dataframe, use the first column as the data of interest, drop others
 
-        if isinstance(data,pd.DataFrame):
-            self.rawData = data[data.columns[0]].to_frame()
-            print('Loaded pd.DataFrame - using column "{}"'.format(data.columns[0]))
-        elif isinstance(data,pd.Series):
+        if isinstance(data, pd.Series):
             self.rawData = data.to_frame()
 
+        self.rawData = data.copy()
+
+        # TODO: rename self.com to something more meaningful
+        self._set_column(self.params.column)
+
+        # Use the OAT loaded into instance if present, otherwise OAT data will
+        # be loaded from OAT master
         if self.params.OATsource == 'self':
             self.OAT = data[self.params.OATname]
 
-        self.modifiedData = self.rawData.copy()
-        self.com = self.modifiedData.columns[0]
-
-        self.date = datetime.now()
-        self.name = '{} {}'.format(self.com, str(self.date))
-
-
-    def commandLine(self):
-        """
-        This function should serve as a method to help guide the user
-        through all of the necessary processing steps to create a model.
-        The strategy is to fill in variables that are missing
-        Run functions and ask user if output seems appropriate
-        Re-run functions if needed
-        General model(s)
-        Plot output of model(s)
-        Display stats of model(s)
-        """
-        pass
-
+        # modifiedData is the working variable for all data modifications
+        self.modifiedData = self.rawData[self.com].to_frame()
 
     def undo(self):
-        '''
-        Allows the user to go back one step in data modification
-        Should this function plot? on verbosity?
-        '''
+        """ Allows the user to go back one step in data modification """
         self.modifiedData = self.restoreData.copy()
 
 
-    def interval_checker():
-        """
-        Calculate the intervalsize of a time series dataset and returns
-        'hourly', '15 minute', 'daily', 'monthly'
-        """
-        pass
+# =============================================================================
+#  CLEANING
+# =============================================================================
 
-#==============================================================================
-# CLEANING
-#==============================================================================
+    def _set_column(self, column):
+        """ Handles the column input during the __init__ of data_keeper"""
+        if isinstance(column, int):
+            self.com = self.rawData.columns[column]
+        elif isinstance(column, str):
+            try:
+                assert(column in list(self.rawData.columns))
+            except AssertionError:
+                print('input param "column" must be in "data.columns"')
+                print('{} not in {}'.format(column, self.rawData.columns))
+            self.com = column
 
     def _IQR(self):
         """
         Calculates new boundaries based on the Inner Quartile Range multiplied
-        by a IQR multiplier (default 1.5) ##CHECK
+        by a IQR multiplier (default 3) ##CHECK
         IQRmult taken from object attribute
 
         Passes new upper and lower bounds to the remove_outliers. Boundarires
-        change only if they are more restrictive than the Floor and Cieling
-        limits provided to remove_outliers
+        change only if they are more restrictive than the parmas.floor and/or
+        params.ceiling limits provided to remove_outliers
+
+        Parameters
+        ----------
+        params.IQRmult : array_like
+            multiplier for the IQR used to calculate new potential boundaries
+        self.modifiedData :
+            the 2nd param
+        third : {'value', 'other'}, optional
+            the 3rd param, by default 'value'
+
+        Returns
+        -------
+        upper, lower : float, float
+            New potential boundaries for remove_outliers
+
+        Raises
+        ------
+        None
         """
 
         Q1 = self.modifiedData[self.com].quantile(0.25)
@@ -160,45 +378,57 @@ class data_handler():
         print('Q(75%): {0:.2f} Q(25%): {1:.2f}'.format(Q3, Q1))
         print('IQR value is {0:.2f}'.format(IQR))
 
-        upper = Q3 + (self.params.IQRmult * IQR)
-        lower = Q1 - (self.params.IQRmult * IQR)
+        upper = round(Q3 + (self.params.IQRmult * IQR), 2)
+        lower = round(Q1 - (self.params.IQRmult * IQR), 2)
 
         return upper, lower
 
-
-    def remove_outliers(self,
-                        floor=None,
-                        ceiling=None,
-                        IQR=None):
+    def remove_outliers(self, floor=None, ceiling=None, IQR=None):
         """
         Tests if data is between bounds (floor, ceiling) and removes entries
         that are out of bounds
 
-        inputs:
-            floor - int - default = 0:
-                The lowest number that the data should take on
-            ceiling - int - default = ??: ##CHECK
-                The largest number that the data should take on
-            iqr - bool:
-                If iqr true, then adjust the floor and ceiling with method _IQR
+        Parameters
+        ----------
+        floor : int
+            replaces params.floor if provided. Represents the lowest value the
+            data should take on.
+        ceiling : int
+            replaces params.ceiling if provided. Represents the max value the
+            data should take on.
+        IQR : Bool
+            If True perform the _IQR function and change boundaries
+            [floor,ceiling], if _IQR is more restrictive. Otherwise just use
+            [floor,ceiling]
 
-        output:
-            modifies self.modifiedData inplace
-            return self
+        Returns
+        -------
+        None
+            modifies attribute self.modifiedData
+            _outlier_plot
 
+        Raises
+        ------
+        None
         """
-        self.restoreData = self.modifiedData.copy()
-        temp = self.modifiedData.copy()
 
-        if floor == None: floor = self.params.floor
-        if ceiling == None: ceiling = self.params.ceiling
-        if IQR == None: IQR = self.params.IQR
+        # replace params.X if supplied to function
+        if not floor:
+            floor = self.params.floor
+        if not ceiling:
+            ceiling = self.params.ceiling
+        if not IQR:
+            IQR = self.params.IQR
+
+        # Store copy incase self.undo() invoked
+        # self.restoreData = self.modifiedData.copy() #disabled july 31,18 v1.4
+
+        # temp needed for being temporary modifiedData
+        temp = self.modifiedData.copy()
 
         if IQR:
             IQRupper, IQRlower = self._IQR()
-
-            if self.params.verbosity > 4:
-                print('IQRupper', IQRupper, 'IQRlower', IQRlower)
+            print('IQRupper', IQRupper, ';', 'IQRlower', IQRlower)
 
             if IQRupper < ceiling:
                 ceiling = IQRupper
@@ -207,35 +437,63 @@ class data_handler():
                 floor = IQRlower
                 print('Floor adjusted by IQR   - Now {0:.2f}'.format(floor))
 
-        print(floor)
-
-        if floor != None:
+        # Select data where floor < data < ceiling
+        if floor is not None:
             temp = temp.where(temp > floor, other=np.nan)
-
-        if ceiling != None:
+        if ceiling is not None:
             temp = temp.where(temp < ceiling, other=np.nan)
         else:
             pass
 
-        temp.dropna(inplace=True)
+        modIndex = self.modifiedData.index
+        indexDifference = modIndex.difference(temp.dropna().index)
 
-        if self.params.verbosity > 2:
-            self._outlier_plot(temp)
-
+        self.outliers = self.modifiedData[self.com][indexDifference]
         self.modifiedData[self.com] = temp
-        return self ## CHECK do i need this here?
+        print('')
 
+    def _merge_oat(self, df, source='masterfile'):
+        """ Copy of function from mypy as of 8/23/2018. Copied to eliminate the
+        need to import anything from mypy (clunky)
+        'Returns dataframe with additional OAT data column.'
 
-    def add_oat_column(self):
+        # TODO: This function is not needed either, right?
+        """
+
+        # Need datetime index to merge correctly
+        if isinstance(df, pd.DataFrame):
+            if df.empty:
+                oatPath = path.join(pathPrefix, 'data/OATmaster.csv')
+                OAT = pd.read_csv(oatPath, index_col=0, parse_dates=True,
+                                  infer_datetime_format=True)
+                return OAT
+
+        # Load data and pd.merge()
+        if source == 'masterfile':
+            oatPath = path.join(pathPrefix, '../mypy/data/OATmaster.csv')
+            print('\nPulling data from: {}'.format(oatPath))
+
+            OAT = pd.read_csv(oatPath, index_col=0, parse_dates=True,
+                              infer_datetime_format=True)
+
+            print('OAT master loaded!')
+            df = pd.merge(df, OAT, right_index=True, left_index=True)
+            print('Merge complete!')
+
+        return df
+
+    def _add_oat_column(self):
         """
         Call mypy to add OAT data to the commodity data. Only need to call this
         if the input data was not supplied with assocaited OAT data.
-        """
 
-        self.restoreData = self.modifiedData.copy()
+        # TODO: Does this function get used, should it be retired?
+        """
+        # Store copy incase self.undo() invoked
+        # self.restoreData = self.modifiedData.copy() #disabled july 31,18 v1.4
 
         if self.OATsource == 'file':
-            self.modifiedData = mypy.merge_oat(self.modifiedData, choose='y') ##CHECK rework MYPY and this function
+            self.modifiedData = self._merge_oat(self.modifiedData)
 
         elif self.OATsource == 'self':
             self.modifiedData['OAT'] = self.OAT
@@ -243,91 +501,124 @@ class data_handler():
         print('Created OAT from {}'.format(self.OATsource))
         print('')
 
-        return self
+    def _resample(self, resampleRate=None, aggFun='mean'):
+        """ Calls resample rate pandas native with default argument handling"""
 
+        # self.restoreData = self.modifiedData.copy() #disabled july 31,18 v1.4
 
-    def _resample(self, resampleRate=None, aggFun = 'mean'):
-
-        self.restoreData = self.modifiedData.copy()
-
-        if resampleRate == None:
+        if resampleRate is None:
             resampleRate = self.params.resampleRate
 
-        self.modifiedData = self.modifiedData.resample(resampleRate).agg(aggFun)
-        self.params.modifiedDataInterval = resampleRate
+        # Need this keep index hack becuase of how sum and mean differ
+        # ie. [nan, nan].sum() = 0 and [nan nan].mean() = nan. KeepIndex helps
+        # to make sure days of missing data dont show up as zeros when they
+        # need to be blank (nan) instead.
+        keepIndex = self.modifiedData.resample(resampleRate).mean().dropna()
 
+        self.modifiedData = (
+                self.modifiedData
+                .resample(resampleRate)
+                .agg(aggFun))
+
+        self.modifiedData = self.modifiedData.loc[keepIndex.index]
+
+        self.params.modifiedDataInterval = resampleRate
 
     def add_degree_hours(self, cutoff=65):
         """
         Use OAT data to generate CDD and HDD. In this implementation we sample
         the HD-hours and CD-hours and then sum them up to what ever timestep
-        we're using for the M&V (usually daily) ##CHECK make sure this works
-        if we want to make an hourly model
+        we're using for the M&V (usually daily)
 
+        Parameters
+        ----------
+        cutoff : integer default = 65
+            the cutoff temp of when we move from 'heating' to 'cooling'
+
+        Returns
+        -------
+        self
+        modifies self.modifiedData to have 4 new columns HDH, CDH, CDH2, HDH2
+
+        Raises
+        ------
+        None
         """
-        self.restoreData = self.modifiedData.copy()
-        ## Check redundant code - refactor
-
+        # self.restoreData = self.modifiedData.copy() #disabled july 31,18 v1.4
 
         # TODO: Should not use resample rate here, should use actual invterval
         # assert that it is H or D??
+
         if self.params.OATsource == 'file':
-            hours = mypy.calculate_degree_days(by=self.params.resampleRate,
-                                               cutoff = 65)
+            hours = _calculate_degree_hours(oatData=None,
+                                            by=self.params.resampleRate,
+                                            cutoff=cutoff)
+
         elif self.params.OATsource == 'self':
-            hours = mypy.calculate_degree_days(data=self.modifiedData,
-                                               by=self.params.resampleRate,
-                                               cutoff = 65)
+            hours = _calculate_degree_hours(oatData=self.OAT,
+                                            by=self.params.resampleRate,
+                                            cutoff=cutoff)
 
         self.modifiedData['HDH'] = hours['HDH']
         self.modifiedData['CDH'] = hours['CDH']
 
-        self.modifiedData['HDH2'] = self.modifiedData['HDH'] ** 2 ## Check. How do we sum HDH2 vs HDD2?
+        self.modifiedData['HDH2'] = self.modifiedData['HDH'] ** 2
         self.modifiedData['CDH2'] = self.modifiedData['CDH'] ** 2
 
-        return self
-
-    def add_time_columns(self):
-        self.modifiedData = mypy.build_time_columns(self.modifiedData)
-
+    def add_time_columns(self, daytime=(8, 20)):
+        """ Calls the mypy function build_time_columns rebranded in this file
+        """
+        self.modifiedData = _build_time_columns(self.modifiedData,
+                                                daytime=daytime)
 
     def data_slice(self):
-        '''
-        If pre and post periods are loaded into the class as a single object
-        this function will allow it to be sliced into how=
-         -- half: 1st half 2nd half
-         -- middate: a single central date to be the split point
-         -- ranges: specifying the two date ranges
+        """
+        This function seperates the pre and post period data by slicing it in
+        one of three ways specified by sliceType
+        how = 'half'- split the data 50/50
+        how = 'middate' - split the data at the date of middate
+        how = 'ranges' - split the data in to [pre1:pre2] and [post1:post2]
 
-        example datestring : "2017-06-01" for June 01, 2017
+        example datestring: "2017-02-28"
 
-        returns: None
-        Modifies instance inplace
+        Parameters
+        ----------
+        None: specified in "params"
 
-        '''
+        Returns
+        -------
+        self
+        modified self.pre and self.post inplace
+
+        Raises
+        ------
+        ValueError
+            When sliceType is not supplied with the slice date(s)
+        """
 
         how = self.params.sliceType
 
         if how == 'half':
             dataLength = len(self.modifiedData)
-            midPoint = int(math.floor(dataLength)/2)
+            midPoint = int(math.floor(dataLength) / 2)
 
-            self.pre = self.modifiedData.iloc[0:midPoint,:]
-            self.post = self.modifiedData.iloc[midPoint:,:]
+            self.pre = self.modifiedData.iloc[0:midPoint, :]
+            self.post = self.modifiedData.iloc[midPoint:, :]
 
         elif how == 'middate':
             if self.params.midDate:
                 midDate = pd.to_datetime(self.params.midDate)
 
-                #iloc to avoid duplicating the point at middate
+                # iloc to avoid duplicating the point at middate
                 self.pre = self.modifiedData[:midDate].iloc[:-1]
                 self.post = self.modifiedData[midDate:]
             else:
-                raise ValueError('data_slice: Must supply midDate with how = "middate"')
+                raise ValueError('data_slice: Must supply midDate with how = '
+                                 '"middate"')
 
         elif how == 'ranges':
             if self.params.dateRanges:
-                ranges = self.params.dateRanges ## CHECK lazy spaghetti
+                ranges = self.params.dateRanges
                 preStart = pd.to_datetime(ranges[0])
                 preEnd = pd.to_datetime(ranges[1])
                 postStart = pd.to_datetime(ranges[2])
@@ -336,534 +627,1711 @@ class data_handler():
                 self.pre = self.modifiedData[preStart:preEnd]
                 self.post = self.modifiedData[postStart:postEnd]
             else:
-                raise ValueError('data_slice: Must supply datranges for how = "ranges"')
+                raise ValueError('data_slice: Must supply datranges for how '
+                                 ' = "ranges"')
 
     def default_clean(self):
-
         """
-        A suite of outlier cleaning functions
-        ##CHECK add more detail
+        A suite of data processing functions. This should be sufficient for
+        99% of models generated with the MnV tool
 
+
+        Ordering:
+            1. Remove outliers and leave as raw data
+            2. Resample data to 1H interval
+            3. Resample data to self.resampleRate
+            4. Use OAT from file or from self to calculate HDH and CDH
+            5. use mypy.build_time_cols to create time columns
+            6. Slice data into pre/post
         """
 
         self.remove_outliers()
-        self._resample(resampleRate = 'H', aggFun = 'mean')
+        self._resample(resampleRate='H', aggFun='mean')
+        # HACK: Remove this since keep index works? needs testing
+        self.modifiedData = self.modifiedData.dropna()
+        self._resample(aggFun='sum')
+
         self.add_degree_hours()
-        self._resample(aggFun = 'sum')
         self.add_time_columns()
         self.data_slice()
 
 
-#==============================================================================
+# =============================================================================
 # PLOTTING
-#==============================================================================
+# =============================================================================
 
-    def _outlier_plot(self, temp):
+    def _outlier_plot(self, yrange=None, title=None):
+        """
+        This plotting method allows the user to see which outliers are being
+        removed from the dataset, and a statistics comparison in the form of a
+        boxplot. Red datapoints indicated points to be removed.
 
-        fig = plt.figure(figsize=(figW, figH))
-        ax0 = plt.subplot2grid((1,5), (0,0))
+        Parameters
+        ----------
+        yrange : tuple
+            if wanting to constrain the yrange to (ymin,ymax)
+        title : str
+            custom title string -- probably useless
 
-        ## Box plot
+        Returns
+        -------
+        None - saves plot as class variable
+
+        Raises
+        ------
+        None
+
+        """
+
+        # setup vars
+        widthFactor = 1.0
+        heightFactor = 1.0
+
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        plt.subplot2grid((1, 5), (0, 0))
+
+        # Box plot
         ax1 = plt.subplot2grid((1, 5), (0, 0), colspan=1)
 
-        _comb = pd.concat([self.modifiedData[self.com],temp], axis=1)
-        _comb.columns = ['before','after']
+        indexDifference = self.rawData.index.difference(self.outliers)
+
+        noOutliers = self.rawData[self.com][indexDifference]
+
+        _comb = pd.concat([self.rawData[self.com],
+                           noOutliers],
+                          axis=1)
+        _comb.columns = ['before', 'after']
         sns.boxplot(data=_comb, ax=ax1)
         plt.ylabel(self.com)
-        plt.title('Remove Outlier Boxplot')
+        plt.title('Before and After')
 
+        # Scatter plot
+        plt.subplot2grid((1, 5), (0, 1), colspan=4)
 
-        ## Scatter plot
-        ax2 = plt.subplot2grid((1, 5), (0, 1), colspan=4)
+        plt.plot(noOutliers, color='k', linestyle='', marker='.')
+        plt.plot(self.outliers, color='r', linestyle='', marker='.')
 
-        indexDifference = self.modifiedData.index.difference(temp.index)
+        plt.title('Outlier removal result. interval = raw'.format(
+            str(self.params.modifiedDataInterval)))
 
-        plt.plot(temp, color= 'k', linestyle='', marker='.')
-        plt.plot(self.modifiedData[self.com][indexDifference], color = 'r',
-                 linestyle='', marker='.')
-
-        plt.title('Outliers removed')
+        if yrange:
+            plt.ylim(yrange)
         plt.show()
 
+        self.outlierPlot = fig
+
+    def _resampled_plot(self, yrange=None, title=None):
         """
-        might need a copy of this method after i edited it ## Check
-        def model_plot(self, pre1,pre2, post1,post2):
+        This plotting method allows the user to see the data after outliers are
+        removed and the final resampling is done.
 
-        fig = plt.figure(figsize=(figW, figH*1.5))
-        ax0 = plt.subplot2grid((2,1), (0,0))
+        Parameters
+        ----------
+        yrange : tuple
+            if wanting to constrain the yrange to (ymin,ymax)
+        title : str
+            custom title string -- probably useless
 
-        ax1 = plt.subplot2grid((2, 1), (0, 0), colspan=1)
+        Returns
+        -------
+        None - saves plot as class variable
 
-        self.pre[self.com].plot(label='actual')
-        self.preModel.plot(label='model')
-        plt.title('preModel ' + params)
-        plt.ylabel(self.com)
-        plt.legend()
-
-        ax2 = plt.subplot2grid((2, 1), (1, 0), colspan=1)
-
-        self.post[self.com].plot(label='actual')
-        self.postModel.plot(label='model')
-        plt.ylabel(self.com)
-        plt.title('postModel ' + params)
-        plt.legend()
-
+        Raises
+        ------
+        None
 
         """
+        # setup vars
+        widthFactor = 1.0
+        heightFactor = 1.0
 
-#==============================================================================
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        plt.subplot2grid((1, 5), (0, 0))
+
+        # Box plot
+        ax1 = plt.subplot2grid((1, 5), (0, 0), colspan=1)
+
+        sns.boxplot(data=self.modifiedData[self.com], ax=ax1)
+        plt.ylabel(self.com)
+        plt.title('clean & resampled data')
+
+        # Scatter plot
+        plt.subplot2grid((1, 5), (0, 1), colspan=4)
+
+        plt.plot(self.modifiedData[self.com],
+                 color='k', linestyle='', marker='.')
+
+        plt.title('Outlier and resample removal result. interval = {}'.format(
+            str(self.params.modifiedDataInterval)))
+
+        if yrange:
+            plt.ylim(yrange)
+
+        self._resampledPlot = fig
+        plt.show()
+
+    def _pre_post_plot(self):
+        """
+        This plotting method allows the a line plot of the data after has been
+        cut into pre and post sections
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None - saves plot as class variable
+
+        Raises
+        ------
+        None
+
+        """
+        # setup vars
+        widthFactor = 1.0
+        heightFactor = 1.0
+
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        ax0 = fig.add_subplot(111)
+
+        ax0.plot(self.pre[self.com], color='royalblue')
+        ax0.plot(self.post[self.com], color='forestgreen')
+        plt.legend(['pre', 'post'])
+        plt.title('Pre and Post period')
+        plt.ylabel(self.com)
+        plt.show()
+
+        self.prepostPlot = ax0
+
+
+# =============================================================================
 # MODELING
-#==============================================================================
+# =============================================================================
 
-class many_ols():
+class ModelParameters():
     """
-    Similar to the data holding class, will allow the user to put their data into
-    an object that will cleanly allow them to run different models and view
-    the stats and plots
+    A simple class to store attributes for the ols_model class. The __init__
+    function is specially formated for the data_keeper class and takes in a
+    **kwargs dictionary to populate the parameters. All parameters have default
+    values, but can be modified in **kwargs.
+
+    Parameters
+    ----------
+    **inputDict : dict
+        each entry in the dictionary should map to a variable in the __init__
+
+    inputDict = {'params' : 'C(month) + C(weekday)',
+         'testTrainSplit' : 'random',
+         'randomState': 4291990,
+         'testSize': 0.2,
+         'commodityRate' : 0.056,
+         'paramList' : ['','C(month)','C(weekday)']}
+
+    var : str or list (['month', 'weekday'])
+        All of the params to run the ols model with
+        if list or str the data is converted in _convert_var to populate
+        self.varList and self.varString
+    varList : list of strings (None)
+        All variables that will be ran in many_ols.test_all_linear()
+        populated by _convert_var
+    varString : str (None)
+        All variables that will be ran in many_ols.test_all_linear()
+        populated by _convert_var
+    testTrainSplit : string
+        'random' - for a random test selection
+        'simple' - Split the data in sequential order where train is the first
+            segment
+    randomState : int / None
+        for 'random' testTrainSplit this is the seed for the randomlist
+        specify an integer if you would like it to be static betweeen runs
+    testSize : float [0.0 - 0.99]
+        The ratio of data used in the test set
+    commodityRate : float
+        The price in dollars for the selected commodity
+    varPermuteList : list of strings
+        List of strings of all variables to be permuted and considered for the
+        many_ols class
 
 
+    Returns
+    -------
+    class instance
+        instance.attibutes
+
+    # TODO: Think of a good name for model class. OM? MC? mod?
+
+
+    Raises
+    ------
+    ValueError
+        When var is not a list of strings or a string
     """
-    def __init__(self, pre, post, folding='simple', inputParams=None):
-        self.pre = pre
-        self.post = post
-        self.inventory = None
-        self.folding = folding
-        self.foldParameter = 0.7
-        self.com = self.pre.columns[0]
-        self.inputParams = inputParams
 
-        if self.folding == 'simple':
+    def __init__(self,
+                 var=['month', 'weekday'],
+                 varList=None,
+                 varString=None,
+                 testTrainSplit='random',
+                 randomState=4291990,
+                 testSize=0.2,
+                 commodityRate=0.056,
+                 varPermuteList=['', 'C(month)', 'C(weekday)']):
 
-            length = len(self.pre)
-            sliceIndex = int(round(length * self.foldParameter))
+        self.var = var
+        self._convert_var(var)
 
-            self.train = self.pre.iloc[:sliceIndex]
-            self.test = self.pre.iloc[sliceIndex:length]
+        self.testTrainSplit = testTrainSplit
+        self.randomState = randomState
+        self.testSize = testSize
+        self.commodityRate = commodityRate
+        self.varPermuteList = varPermuteList
 
-    def _param_permute(self):
-
+    def _convert_var(self, var):
         """
-        Take in params and return a list of all combos of params without making
-        stupid combos
+        Convert the var from the list form ['month','hour']
+        to the string form 'C(month) + C(hour)' or vice versa. Important for
+        allowing flexibility in how the vars are input and it helps the build
+        dummy section play nice.
+
+        Parameters
+        ----------
+        var : string or list
+            All of the variables to run the ols model with
+
+        Returns
+        -------
+        list or string
+            if list input, string returns. if string input list returns
+
+        Raises
+        ------
+        ValueError
+            Input var must be list or string
         """
 
-        a1 = ['CDH', 'CDH2', '']
-        b1 = ['HDH', 'HDH2', '']
+        DD = ['HDH', 'CDH', 'CDH2', 'HDH2']
 
-        if self.inputParams == None:
-            inputs = ['', 'C(month)','C(hour)','C(weekend)']
+        # convert to list, varString
+        if isinstance(var, list):
+            self.varList = list(var)
+            newVarList = []
+            for variable in self.varList:
+                if variable in DD:
+                    newVarList.append(variable)
+                else:
+                    newVarList.append("C({})".format(variable))
+
+            self.varString = ' + '.join(newVarList)
+
+        # conver to string, varList
+        elif isinstance(var, str):
+            varList = var.split('+')
+            varList = [x.replace("C(", "").replace(")", "").strip(' ')
+                       for x in varList]
+            self.varList = varList
+            self.varString = var
+
         else:
-            inputs = self.inputParams
+            raise ValueError('var input must be either string or list as '
+                             ' form ["month","hour"] or "C(month) + C(hour)"')
 
-        els = []
-        for i in range(1,len(inputs)):
-            els += [list(x) for x in itertools.combinations(inputs, i)]
-
-        parList = []
-
-        for a in a1:
-            for b in b1:
-                for e in els:
-                    par = [a,b] + e
-                    parList.append(" + ".join(filter(None, par)).rstrip(' +'))
-        parList.remove('')
-
-        return parList
-
-    def run_all_linear(self):
-        """
-        Run several models using the prebaked vars in _param_permute. ## check
-        need to refactor the vars as things that can be modified from the outside
-        Collect all of the models in modelPool to have stats run on them later
-        """
-
-        outputs = {}
-        paramList = self._param_permute()
-
-        for params in paramList:
-            try:
-                outputs[params] = ols_model(self.pre, self.post, params)
-            except Exception as e:
-                print('Could not complete model with {}'.format(params))
-                print(e)
-
-        self._modelPool = outputs
-        self._pool_stats()
-
-
-    def _pool_stats(self):
-
-        """
-        Take all of the models in modelPool and make sense of them so they
-        can be ranked, plotted, etc..
-
-        """
-
-        try:
-            assert(self._modelPool)
-        except AssertionError:
-            print('You must run "run_all_linear" to generate modelPool before running pool_stats')
-
-        statsPool = {}
-
-        modelNumber = -1
-
-        for params, mod in self._modelPool.iteritems():
-            modelNumber += 1
-
-            newStatsRow = {}
-
-            newStatsRow['params'] = params
-            newStatsRow['AIC'] = mod.Fit.aic
-            newStatsRow['BIC'] = mod.Fit.bic
-            newStatsRow['R2'] = mod.Fit.rsquared
-            newStatsRow['AR2'] = mod.Fit.rsquared_adj
-            newStatsRow['mse'] = mod.Fit.mse_resid
-            newStatsRow['sum'] = mod.Fit.summary()
-
-            statsPool[modelNumber] = newStatsRow
-
-        self.statsPool = pd.DataFrame(statsPool).T.sort_values('AIC')
-
-
-    def plot_pool(self, number=5):
-
-        for i in range(number):
-            modParams = self.statsPool['params'].iloc[i]
-            tempMod = self._modelPool[modParams]
-
-            tempMod.model_plot()
-            tempMod.stats_plot()
-            plt.show()
+    def show_params(self):
+        """ Display the key, value pairs of the parmeters in this class"""
+        for k, v in self.__dict__.iteritems():
+            print(k, v)
 
 
 class ols_model():
+    """
+    Designed to take inputs from data_keeper and a **kwargs inputDict
+    Performs a single linear regression based on input params, calculates
+    predicted values using the self.post data set, and reports statistics
+    information about the model
 
-    def __init__(self, pre, post, params, rate = 1):
+    Parameters
+    ----------
+    pre : pd.DataFrame
+        Timeseries data passed from data_keeper
+    post : pd.DataFrame
+        Timeseries data passed from data_keeper
+    inputDict : dict
+        **kwargs type dict to be passed into the ModelParameters class
 
-        self.params = params
+    Returns
+    -------
+    instance: mc
+        notable attributes
+        ------------------
+
+        ## TODO: fill me
+
+    Raises
+    ------
+    ## TODO: Write me
+    KeyError
+        when a key error
+    OtherError
+        when an other error
+    """
+
+    def __init__(self, pre, post, inputDict):
+
+        self.params = ModelParameters(**inputDict)
         self.pre = pre
         self.post = post
         self.com = pre.columns[0]
-        self.rate = rate
+        # TODO: interval_check
+        self.dataInterval = pd.infer_freq(self.pre.index)
 
-        # TODO: Implement **kwargs input dict for models?
+        self.split_test_train(how=self.params.testTrainSplit)
 
-        self.split_test_train()
-        self.Model = smf.ols(self.com + '~' + params, data = self.train)
+        self.Model = smf.ols(self.com + '~' + self.params.varString,
+                             data=self.train)
         self.Fit = self.Model.fit()
 
-        #Make predictions called "Calcs"
+        # TODO Is this math correct?
+        self.Fit.cvrmse = (math.sqrt(self.Fit.mse_resid)
+                           / self.train[self.com].mean())
+
+        # Make predictions called "Calcs"
         self.trainCalc = self.Fit.predict(self.train)
         self.testCalc = self.Fit.predict(self.test)
         self.postCalc = self.Fit.predict(post)
 
-        # XXX: does this work? what is fit.resid?
+        self.trainDiff = self.trainCalc - self.train[self.com]
         self.postDiff = self.postCalc - self.post[self.com]
-        self.postCumsum = self.postDiff.cumsum()[-1]
-#        self.savings = self.Fit.resid * self.rate
 
-        ## CHECK
-        # Need to add savings
-        # need to savings rate
+        # Drop all nan values in cumsum so that it does not
+        # fail to grab the final value in cumsum()[-1]
+        # bug provided  by Josue on 8/8/2018 The bug is occuring becuase the
+        # OAT document was not up to date on the POST period being used
+        self.postDiff = self.postDiff.dropna()
+        self.postDiffCumsum = self.postDiff.cumsum()[-1]
 
+        # Savings Fraction (F) - Differnce in savings / expected use
+        self.F = self.postDiffCumsum / self.postCalc.cumsum()[-1]
 
-        #    r2 = r2_score(mnv.post[mnv.com], mnv.postModel)
-        #    print(r2)
-        #    mse = mean_squared_error(mnv.post[mnv.com], mnv.postModel)
-        #    print(mse)
+    def _remove_degree_days(self, var):
+        """This removes and reinstalls the degree days for dummy creation"""
 
-        #    aR2 = 1-(1-r2)*(len(mnv.post)-1)/(len(mnv.post)-14-1) #14 is len params
-        #    print(aR2)
-        #     cvrmse = sqrt(mse) / (len(data)-len(params) / mean(y)
-        #    cvrmse = math.sqrt(mse) / (len(mnv.post)-14) / mnv.post.mean()
+        var = list(var)  # Ghetto copy
+        dumList = ['CDH', 'HDH', 'CDH2', 'HDH2']
+        removed = []
 
-        ## Check cvrmse?
+        for dum in dumList:
+            if dum in var:
+                var.remove(dum)
+                removed.append(dum)
+            else:
+                pass
 
-    def split_test_train(self, how='simple'):
+        return var, removed
+
+    def _infer_interval(idx):
+        pass
+
+    def calculate_vif(self):
         """
-        Take the pre data set and create two variables "test" and "train" to
-        feed into the model
+        Variance Inflation Factor (VIF) is a method to determine if two input
+        variables are highly correlated with one another. This is something to
+        avoid in models. Typically values less than 5 are appropriate.
 
-        Split the data in the following ways:
-            -1/3 : 2/3 simple split
-            -a random collection of 1/3 : 2/3
-            -as a Kfold with or without shuffling
+        Parameters
+        ----------
+        self.pre : pd.DataFrame
+            This calculation is run on the pre dataset
+
+        Returns
+        -------
+        pd.DataFrame
+            results of VIF caluculation paired with the dummy variables is
+            returned as well as stored in self.vif
+
+        Raises
+        ------
+        None
+
         """
+
+        # TODO: IF VIF HAS TOO FEW COLUMNS THEN ABORT
+        # Get dummies
+        dummyColumns, removed = self._remove_degree_days(self.params.varList)
+
+        try:
+            dums = pd.get_dummies(self.pre[dummyColumns],
+                                  drop_first=True,
+                                  columns=dummyColumns)
+        except ValueError:
+            dums = None
+        else:
+            dums = dums
+        finally:
+            self.dums = dums
+
+        # join dummies to commodity and degree days
+        testdf = pd.concat([self.pre[removed], dums], axis=1)
+
+        # Add constant column if needed (essentially this is the intercept)
+        testdf = add_constant(testdf)
+
+        # Get VIF values
+        vif_values = [variance_inflation_factor(testdf.values, i)
+                      for i in range(testdf.shape[1])]
+        # Format into nice pd.DataFrame
+        vif = pd.DataFrame(index=testdf.columns,
+                           data=vif_values,
+                           columns=['VIF'])
+
+        self.vif = vif
+
+    def calculate_kfold(self):
+        """
+        Ensures that the slicing of data is not influencing the results. Kfold
+        analysis will split the data into X cominations of test/train where
+        X = 1/(test_size_fraction). So if test_size_fraction = 0.2 then 5 kfold
+        splits will be made. Each time the testsize will be 0.2 and the train
+        data set will be the remainder.
+
+        This functions reports the kfold results as a relative deviation from
+        the average of the mean squared error of all of the folds.
+
+        explained again:
+        1. Generate X fold
+        2. Fit model var to all folds
+        3. Calculate MSE for each model
+        4. Average MSE for all folds
+        5. Report the ratio of all folds individual MSE to the mean MSE
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+        pd.DataFrame
+            results of KFold validation is stored in self.kfoldStats and
+            self.kfoldRelative
+
+        Raises
+        ------
+        None
+
+        """
+
+        # dict to hold final vales and transform to df
+        statsPool = {}
+        foldNumber = -1
+
+        # _folds is a static set of indicies to re-references the slices
+        for train_index, test_index in self._folds:
+
+            foldNumber += 1
+
+            # split into test/train based on kfold indicies
+            train = self.pre.iloc[train_index, :]
+#            test = self.pre.iloc[test_index, :]  # TODO removed for speed
+
+            # in this function to maintaine consitency
+            Fit = smf.ols(self.com + '~' + self.params.varString, train).fit()
+
+            # TODO: DO we need to be using predicted or Fit? MATH IS HARD
+#            predicted = Fit.predict(test)
+
+            newStatsRow = {'R2': Fit.rsquared,
+                           'AR2': Fit.rsquared_adj,
+                           # 'cvrmse': Fit.cvrmse,
+                           'mse': Fit.mse_resid,
+                           # 'postDiff' : Fit.postCumsum,
+                           }
+
+            statsPool[foldNumber] = newStatsRow
+
+        # Build DataFrame
+        kfoldStats = pd.DataFrame(statsPool).T.sort_values('mse')
+        # Re-order columns
+        self.kfoldStats = kfoldStats[['R2', 'AR2', 'mse']]
+
+        # Building relative MSE values
+        mseMean = round(kfoldStats['mse'].mean())
+        kfoldRelative = kfoldStats['mse'] / mseMean * 100
+        kfoldRelative = kfoldRelative.append(pd.Series({'<mse>': mseMean}))
+
+        self.kfoldRelative = kfoldRelative.rename('rel. pct.')
+
+    def calculate_uncertainty(self, confidence=90):
+        """
+        Following ASHRAE Guideline 14-2002
+        "Measurement of Energy and Demand Savings"
+
+        U = [t * 1.26 * CVRMSE * sqrt(n + 2)] / [F * sqrt(n * m)]
+
+        t = t-statistic (calculated using scipy.stats.t.ppf())
+        CVRMSE = Normalized Root mean squared Error
+        n = number of data points or periods in the baseline period
+        F = approximate percentage of baseline energy that is saved. This
+            percentage should be derived from the m periods of the reporting
+            period. Before savings are actually achieved, the predicted savings
+            may be used in computed F for purposed of designing the savings
+            determination algorithm.
+        m = number of periods in the post-retrofit savings reporting period
+
+        U = relative uncertainty in a reported energy saving, expressed as
+            a percentage of the savings
+
+        """
+        t = scipy.stats.t.ppf(confidence/100, len(self.post))
+
+        numer = t * 1.26 * self.Fit.cvrmse * sqrt(len(self.train) + 2)
+        denom = self.F * sqrt(len(self.train) * len(self.post))
+
+        self.uncertainty = numer / denom
+
+    def split_test_train(self, how='random', testSize=None, randomState=None):
+        """
+        Splits the pre period data into test and train sets for the model to be
+        generated (train) with and evaluated against (test)
+
+        Parameters
+        ----------
+        how : str default:'random'
+            how determins which way the data will be sliced. [simple,random]
+            simple - will just split the data at a single point where train is
+            the begining of the data, and test the latter part
+            random - shuffles the timeseries index and then splits the data
+            into 1-testSize (train) and testSize (test) chunks
+        testSize : float
+            This determine which fraction (eg 0.25) of the pre dataset will be
+            used in the test set. The remainder will be used in the train set
+        randomState: int
+            When using how = 'random' this is the seed value by which the
+            random shuffle is carried out. if you leave it as None, a new
+            shuffle will be used each time the function is ran. By specifying a
+            value you can use the same shuffle over and over.
+
+        Returns
+        -------
+        None
+
+            results of splitting generate two pd.DataFrame and are stored in
+            self.test
+            self.train
+
+        Raises
+        ------
+        None
+
+        """
+
+        # load in params if not given
+        if testSize is None:
+            testSize = self.params.testSize
+        if randomState is None:
+            randomState = self.params.randomState
 
         how = how.lower()
         length = len(self.pre)
 
         if how == 'simple':
-            twoThirds = int(round(length * 2/3))
-            self.train = self.pre.iloc[0:twoThirds]
-            self.test = self.pre.iloc[twoThirds:length]
+            # Must take 1-testsize, since testsize is the small fraction
+            splitIndex = int(round(length * (1 - testSize)))
+
+            self.train = self.pre.iloc[0:splitIndex]
+            self.test = self.pre.iloc[splitIndex:length]
 
         elif how == 'random':
-            #TODO: Program this
-            pass
 
+            self._get_folds(randomState)
+
+            self.train = self.pre.iloc[self._folds[0][0]]
+            self.test = self.pre.iloc[self._folds[0][1]]
+
+    def _get_folds(self, randomState):
+        """ Splits the index into 1/(testSize) folds, stores in self._folds"""
+        # Calculate # of folds from 1/testSize
+        folds = int(round(1 / self.params.testSize))
+
+        # Use the scikitlearn kfolds function to generate randomized folds
+        kf = KFold(n_splits=folds,
+                   shuffle=True,
+                   random_state=randomState)
+
+        self._folds = [x for x in kf.split(self.pre)]
+
+    def _get_tmy_data(self, startDate='pre', endDate='fiscal'):
+        """ Pull the TMY data from the PI tag 'Future_TMY' and store it to be
+        used for calculating the TMY calcs
+
+        Parameters
+        ----------
+        starteDate : str ('pre')
+            'yyyy-mm-dd' formatted string
+            if 'pre', use the timeStamp of the begining of the 'pre' data set
+        endDate : str ('fiscal')
+            'yyyy' formatted string or 'yyyy-mm-dd' string
+            if 'fiscal' use the last day of this fiscal year
+            if 'year' use Dec 31 of current year
+            if 'yyyy' do the same as 'year' but with specified year
+
+        Returns
+        -------
+        None
+
+            results of splitting generate two pd.DataFrame and are stored in
+            self.test
+            self.train
+
+        Raises
+        ------
+        None
+        """
+
+        pi = pi_client()
+
+        # find start/end dates
+        # pull tmy data from pi
+        # build hdh chd time columns and all that jazz
+
+        currentTime = datetime.now()
+        year = int(currentTime.year)
+        month = int(currentTime.month)
+
+        # Dealing with startDate
+        if startDate == 'pre':
+            startDate = self.pre.index[0].strftime('%Y-%m-%d')
+        else:
+            startDate = startDate
+
+        # Dealing with endDate
+        if endDate == 'year':
+            endDate = "{}-01-01".format(year + 1)
+
+        if endDate == 'fiscal':
+            if month >= 4:
+                year += 1
+            else:
+                pass
+            endDate = "{}-04-01".format(year)
+
+        elif len(endDate) == 4:
+            try:
+                if (int(endDate) - 2018) < 50:
+                    year = int(endDate)
+                    endDate = "{}-01-01".format(year + 1)
+            except ValueError:
+                print('Cant convert {} to int'.format(endDate))
+        else:
+            endDate = endDate
+
+        print('Date range used for TMY'
+              ' analysis start:{}, end:{}'.format(startDate, endDate))
+
+        # TODO: What if model is not hourly?
+        tmy = pi.get_stream_by_point(['Future_TMY'], start=startDate,
+                                     end=endDate, interval='1h')
+
+        hours = _calculate_degree_hours(tmy, by='hour')
+
+        tmy['HDH'] = hours['HDH']
+        tmy['CDH'] = hours['CDH']
+
+        tmy['HDH2'] = tmy['HDH'] ** 2
+        tmy['CDH2'] = tmy['CDH'] ** 2
+
+        self.tmy = tmy
+        return tmy
+
+    def _make_tmy_pre(self):
+        """ Predict building behavior using tmy data """
+
+        tmyPre = self.Fit.predict(self.tmy).to_frame()
+        tmyPre.columns = ['tmyPre']
+
+        self.tmyPre = tmyPre
+
+    def _make_tmy_post(self):
+        """ Predict building behavior using tmy data and post data"""
+
+        tmyPost = self.postModel.fit().predict(self.tmy).to_frame()
+        tmyPost.columns = ['tmyPost']
+
+        self.tmyPost = tmyPost
+
+    def compare_tmy_models(self, startDate='pre', endDate='fiscal'):
+        """ This function calculates the tmy pre and post models, then finds
+        the difference between them
+
+        Parameters
+        ----------
+        startDate : str
+            see _get_tmy_data
+        endDate : str
+            see _get_tmy_data
+
+        Returns
+        -------
+        None
+            stores self.tmy
+
+        Raises
+        ------
+        None
+
+        """
+        # TODO: Fix the plots!
+
+        self._get_tmy_data(startDate=startDate, endDate=endDate)
+
+        self.tmy = self.tmy.resample(self.dataInterval).sum()
+        self.tmy = _build_time_columns(self.tmy)
+
+        # TODO: Drop month from TMY vars since it should alywas be < 1year
+        self.postModel = smf.ols(
+            self.com + '~' + self.params.varString.replace('+ C(month)', ''),
+            data=self.post)
+
+        self._make_tmy_post()
+        self._make_tmy_pre()
+
+        self.tmyPreComp = self.pre.merge(self.tmyPre, how='inner',
+                                         right_index=True,
+                                         left_index=True)
+
+        self.tmyPreComp = self.tmyPreComp[[self.com, 'tmyPre']]
+
+
+        # TODO: Dont need tmyPostComp anymore? Test without
+        self.tmyPostComp = self.post.merge(self.tmyPost, how='inner',
+                                           right_index=True, left_index=True)
+        self.tmyPostComp = self.tmyPostComp[[self.com, 'tmyPost']]
+
+        self.tmyFutureDiff = self.tmyPost['tmyPost'] - self.tmyPre['tmyPre']
+        # TODO:
+        # compare distance? range, or typical year (days/365) * (365-days?)
+        # Show in savings plot possible?
+        pass
+
+    def plot_tmy_comparison(self):
+        """
+        This plotting method allows the user to see the performance of the
+        ols_model by viewing the actual/predicted test data and post data
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        None - saves plot as class variable
+
+        Raises
+        ------
+        None
+
+        """
+
+        _color = 'tomato'
+        _style = '--'
+
+        widthFactor = 1.0
+        heightFactor = 2.0
+
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        plt.subplot2grid((3, 1), (0, 0))
+
+        plt.subplot2grid((3, 1), (0, 0), colspan=1)
+
+        plt.plot(self.tmyPreComp[self.com], label='actual', color='k')
+        plt.plot(self.tmyPreComp['tmyPre'], label='tmy_pre_model',
+                 color=_color, linestyle=_style)
+
+#        self.test[self.com].plot(label='actual', color='k')
+#        self.testCalc.plot(label='model', color=_color, linestyle=_style)
+
+        plt.title('tmy Pre ' + self.params.varString)
+        plt.ylabel(self.com)
+        plt.legend()
+
+        plt.subplot2grid((3, 1), (1, 0), colspan=1)
+
+        plt.plot(self.tmyPostComp[self.com], label='actual', color='k')
+        plt.plot(self.tmyPostComp['tmyPost'], label='tmy_Post_model',
+                 color=_color, linestyle=_style)
+
+#
+#        self.post[self.com].plot(label='actual', color='k')
+#        self.postCalc.plot(label='model', color=_color, linestyle=_style)
+        plt.ylabel(self.com)
+        plt.title('tmy Post ' + self.params.varString)
+        plt.legend()
+        plt.tight_layout()
+
+        plt.subplot2grid((3, 1), (2, 0), colspan=1)
+
+        plt.plot(self.tmyPre, label='tmy_Pre_model', color='darkgreen')
+        plt.plot(self.tmyPost[self.post.index[0]:], label='tmy_Post_',
+                 color='deepskyblue')
+
+#
+#        self.post[self.com].plot(label='actual', color='k')
+#        self.postCalc.plot(label='model', color=_color, linestyle=_style)
+        plt.ylabel(self.com)
+        plt.title('both tmy ')
+        plt.legend()
+        plt.tight_layout()
+
+        self.tmyPlot = fig
 
     def model_plot(self):
+        """
+        This plotting method allows the user to see the performance of the
+        ols_model by viewing the actual/predicted test data and post data
 
-        fig = plt.figure(figsize=(figW, figH*1.5))
-        ax0 = plt.subplot2grid((2,1), (0,0))
+        Parameters
+        ----------
 
-        ax1 = plt.subplot2grid((2, 1), (0, 0), colspan=1)
-        self.test[self.com].plot(label='actual')
-        self.testCalc.plot(label='model')
+        Returns
+        -------
+        None - saves plot as class variable
 
-        plt.title('Test data ' + self.params)
+        Raises
+        ------
+        None
+
+        """
+
+        _color = 'mediumorchid'
+        _style = '--'
+
+        widthFactor = 1.0
+        heightFactor = 1.0
+
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        plt.subplot2grid((2, 1), (0, 0))
+
+        plt.subplot2grid((2, 1), (0, 0), colspan=1)
+
+        plt.plot(self.test[self.com], label='actual', color='k')
+        plt.plot(self.testCalc, label='model', color=_color, linestyle=_style)
+
+#        self.test[self.com].plot(label='actual', color='k')
+#        self.testCalc.plot(label='model', color=_color, linestyle=_style)
+
+        plt.title('Test data ' + self.params.varString)
         plt.ylabel(self.com)
         plt.legend()
 
-        ax2 = plt.subplot2grid((2, 1), (1, 0), colspan=1)
+        plt.subplot2grid((2, 1), (1, 0), colspan=1)
 
-        self.post[self.com].plot(label='actual')
-        self.postCalc.plot(label='model')
+        plt.plot(self.post[self.com], label='actual', color='k')
+        plt.plot(self.postCalc, label='model', color=_color, linestyle=_style)
+#
+#        self.post[self.com].plot(label='actual', color='k')
+#        self.postCalc.plot(label='model', color=_color, linestyle=_style)
         plt.ylabel(self.com)
-        plt.title('Post data ' + self.params)
+        plt.title('Post data ' + self.params.varString)
         plt.legend()
         plt.tight_layout()
 
-    # TODO: finish coding this function
+        self.mod1Plot = fig
+
+    def model_plot2(self):
+        """
+        This plotting method allows the user to see the performance of the
+        ols_model by viewing the actual/predicted of JUST the test data
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        None - saves plot as class variable
+
+        Raises
+        ------
+        None
+
+        """
+
+        widthFactor = 1.0
+        heightFactor = 0.75
+
+        _color = 'mediumorchid'
+        _style = '--'
+
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        plt.subplot2grid((1, 1), (0, 0))
+
+        plt.subplot2grid((1, 1), (0, 0), colspan=1)
+
+        plt.plot(self.test[self.com], label='actual', color='k')
+        plt.plot(self.testCalc, label='model', color=_color, linestyle=_style)
+#        self.test[self.com].plot(label='actual', color='k')
+#        self.testCalc.plot(label='model', color=_color, linestyle=_style)
+
+        plt.title('Test data ' + self.params.varString)
+        plt.ylabel(self.com)
+        plt.legend()
+
+        self.mod2Plot = fig
+
     def stats_plot(self):
+        """
+        This plotting method allows the user to see the performance of the
+        ols_model by viewing 3 plots
 
-        fig = plt.figure(figsize=(figW*1, figH * 0.75))
-        ax0 = plt.subplot2grid((1,3), (0, 0))
+        qqplot - shows if there is more or less fitting error for data values
+        that are either larger or smaller
 
-        ax1 = plt.subplot2grid((1,3), (0, 0))
+        calc vs actual - View the train data vs the calc train data
+        resids vs actual - View the train data vs the calc resids of train data
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None - saves plot as class variable
+
+        Raises
+        ------
+        None
+
+        """
+
+        widthFactor = 1.0
+        heightFactor = 0.75
+
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
+        plt.subplot2grid((1, 3), (0, 0))
+
+        ax1 = plt.subplot2grid((1, 3), (0, 0))
         sm.qqplot(self.Fit.resid, ax=ax1)
 
-        ax2 = plt.subplot2grid((1,3), (0, 1))
-        ax2.scatter(self.post[self.com].values,
-                    self.postCalc.values,
-                    s=1, c = 'k')
-        plt.axis('equal')
-        plt.xlabel('Post actual')
-        plt.ylabel('Post Calc')
+        ax2 = plt.subplot2grid((1, 3), (0, 1))
+        ax2.scatter(self.train[self.com].values,
+                    self.trainCalc.values,
+                    s=1, c='k')
 
-        ax3 = plt.subplot2grid((1,3), (0, 2))
-        ax3.scatter(self.post[self.com].values,
-                    self.postDiff.values,
-                    s=1, c = 'k')
         plt.axis('equal')
-        plt.xlabel('Post actual')
-        plt.ylabel('Post Calc Residuals')
+        plt.xlabel('Train actual')
+        plt.ylabel('Train Calc')
+
+        ax3 = plt.subplot2grid((1, 3), (0, 2))
+        ax3.scatter(self.train[self.com].values,
+                    self.trainDiff.values,
+                    s=1, c='k')
+
+        plt.axis('equal')
+        plt.xlabel('Train actual')
+        plt.ylabel('Train Calc Residuals')
         plt.tight_layout()
 
+        self.statsPlot = fig
 
-    def savings_plot(self, yaxis='raw', rate=1):
+    def savings_plot(self, yaxis='raw', pointSize=4):
+        """
+        This plotting method allows the user to see the numeric or financial
+        difference between the post and the postCalc
+
+
+        Parameters
+        ----------
+        yaxis : string default='raw'
+            'raw' - Shows the absolute savings in the native units
+            'dollars' - converts to money using self.params.commodityRate
+        pointSize : int
+            specify the size of the points in the scatter plot
+
+        Returns
+        -------
+        None - saves plot as class variable
+
+        Raises
+        ------
+        None
+
+        """
+
+        widthFactor = 1.0
+        heightFactor = 1.5
 
         if yaxis == 'raw':
             ydata = self.postDiff
             ylab = '[' + self.com + ']'
 
         elif yaxis == 'dollars':
-            ydata = self.postDiff * rate
+            ydata = self.postDiff * self.params.commodityRate
             ylab = '[$]'
 
         else:
-            raise ValueError('savings_plot requires y-axis to be == raw or dollars')
+            raise ValueError('savings_plot requires y-axis to be == '
+                             'raw or dollars')
             return
 
+        _color = 'mediumorchid'
+        _style = '--'
 
-        fig = plt.figure(figsize=(figW*1.2, figH*1.5))
-        ax0 = plt.subplot2grid((2,1), (0,0))
+        # Figure
+        fig = plt.figure(figsize=(figW * widthFactor, figH * heightFactor))
 
-        ax1 = plt.subplot2grid((2, 1), (0, 0), colspan=1)
+        plt.subplot2grid((3, 1), (0, 0))
+
+        # Plot 0 - Model post
+        plt.subplot2grid((3, 1), (0, 0), colspan=1)
+
+        plt.plot(self.post[self.com], label='actual', color='k')
+        plt.plot(self.postCalc, label='model', color=_color, linestyle=_style)
+        plt.ylabel(self.com)
+        plt.title('Post data ' + self.params.varString)
+        plt.legend()
+
+        # plot 1 - savings instant
+        ax2 = plt.subplot2grid((3, 1), (1, 0), colspan=1)
 
         savingsPos = ydata[ydata >= 0]
         savingsNeg = ydata[ydata < 0]
 
-        plt.plot(savingsPos, color = 'k', linestyle='',marker='.', markersize=4)
-        plt.plot(savingsNeg, color = 'r',linestyle='',marker='.', markersize=4)
-#        self.postTest.plot(label='model')
-        plt.title('Savings predicted by ' + self.params)
-        plt.ylabel('Savings {}'.format(ylab))
-        plt.legend()
+        plt.plot(savingsPos, color='k', linestyle='', marker='.',
+                 markersize=pointSize)
+        plt.plot(savingsNeg, color='r', linestyle='', marker='.',
+                 markersize=pointSize)
 
-        ax2 = plt.subplot2grid((2, 1), (1, 0), colspan=1)
+#        self.postTest.plot(label='model')
+        plt.title('Savings predicted by ' + self.params.varString)
+        plt.ylabel('Savings {}'.format(ylab))
+#        plt.legend()
+
+        # Plot 2 - savings cumulative
+        plt.subplot2grid((3, 1), (2, 0), colspan=1, sharex=ax2)
 
         cumulative = ydata.cumsum()
 
         cumPos = cumulative[cumulative >= 0]
         cumNeg = cumulative[cumulative < 0]
 
-        plt.plot(cumPos, color = 'k', linestyle='',marker='.', markersize=4)
-        plt.plot(cumNeg, color = 'r', linestyle='',marker='.', markersize=4)
-
-#        self.savings.cumsum().plot(label='savings cumulative')
-#        self.prediction.plot(label='model')
-#        plt.title('Savings predicted by ' + self.params)
+        plt.plot(cumPos, color='k', linestyle='', marker='.',
+                 markersize=pointSize)
+        plt.plot(cumNeg, color='r', linestyle='', marker='.',
+                 markersize=pointSize)
         plt.ylabel('Cumulative Savings')
-        plt.legend()
-        plt.show()
+#        plt.legend()
+
+        plt.tight_layout()
+        fig.subplots_adjust(hspace=0.2)
+
+        self.savingsPlot = fig
 
 
+class many_ols():
+    """
+    Similar to the data holding class, will allow the user to put data into
+    an object that will cleanly allow them to run different models and view
+    the stats and plots
+
+    Parameters
+    ----------
+    pre : pd.DataFrame
+        df of the pre-period data with HDH and time column variables
+    post : pd.DataFrame
+        df of the post-period data with HDH and time column variables
+    inputDict : dict
+        **kwargs type dict to be passed into the ModelParameters class
+
+    Returns
+    -------
+    class instance: mod
+
+        notable attributes
+        ------------------
+        mod.postCalc
+        mod.postDiffCumsum
+        # TODO: Finalize
+
+    """
+
+    def __init__(self, pre, post, inputDict):
+        self.pre = pre
+        self.post = post
+        self.com = self.pre.columns[0]
+        self.inputDict = inputDict
+
+    def _var_permute(self):
+        """ Creates all permutations of HDH or HDH2, CDH or CDH2, and the vars
+        passed in to 'varPermuteList including ""
+        """
+
+        CDHs = ['CDH', 'CDH2', '']
+        HDHs = ['HDH', 'HDH2', '']
+
+        if self.inputDict['varPermuteList']:
+            inputs = self.inputDict['varPermuteList']
+        else:
+            inputs = ['', 'C(month)', 'C(weekday)']
+
+        # Generate all permutations of the varPermuteList
+        els = []
+        for i in range(1, len(inputs)):
+            els += [list(x) for x in itertools.combinations(inputs, i)]
+
+        # Generate 'all' permutations with the constraints that CDH and CDH2
+        # Dont appear together etc..
+        permutedList = []
+        for c in CDHs:
+            for h in HDHs:
+                for e in els:
+                    var = [c, h] + e
+                    permutedList.append(
+                            " + ".join(filter(None, var)).rstrip(' +'))
+
+        # Remove the var combo where all options are ""
+        permutedList.remove('')
+
+        return permutedList
+
+    def run_all_linear(self):
+        """Takes in every combination of vars generated from _var_permute and
+        creates a 'pool' of linear models
+        # TODO: this function can be slow, maybe trim the OLS init as much as
+        possible to increase speed here
+
+        """
+
+        print('Entering run_all_linear()...')
+
+        outputs = {}
+        permuteVars = self._var_permute()
+
+        for var in permuteVars:
+            self.inputDict['var'] = var
+            outputs[var] = ols_model(self.pre, self.post, self.inputDict)
+
+        self._modelPool = outputs
+        self._pool_stats()
+
+        print('run_all_linear() complete')
+
+    def _pool_stats(self):
+        """ Grabs specific stats for each model and stores them in a dataframe
+
+        Returns
+        -------
+        string
+
+        Raises
+        ------
+        AssertionError - Must run all models before diving into the pool
+        """
+        try:
+            assert(self._modelPool)
+        except AssertionError:
+            print('You must run "run_all_linear" to generate modelPool before'
+                  ' running pool_stats')
+
+        statsPool = {}
+
+        modelNumber = -1
+
+        # Collect stats into dict of dicts
+        try:  # py27 and py36 compatibility
+
+            for var, mod in self._modelPool.iteritems():
+                modelNumber += 1
+
+                newStatsRow = {'var': var,
+                               'AIC': mod.Fit.aic,
+                               'R2': mod.Fit.rsquared,
+                               'AR2': mod.Fit.rsquared_adj,
+                               'cvrmse': mod.Fit.cvrmse,
+                               'postDiff': mod.postDiffCumsum}
+
+                statsPool[modelNumber] = newStatsRow
+
+        except AttributeError:  # py27 - dict.iteritems() py36 - dict.items()
+            for var, mod in self._modelPool.items():
+                modelNumber += 1
+
+                newStatsRow = {'var': var,
+                               'AIC': mod.Fit.aic,
+                               'R2': mod.Fit.rsquared,
+                               'AR2': mod.Fit.rsquared_adj,
+                               'cvrmse': mod.Fit.cvrmse,
+                               'postDiff': mod.postDiffCumsum}
+
+                statsPool[modelNumber] = newStatsRow
+
+        # Build DataFrame
+        self.statsPool = pd.DataFrame(statsPool).T.sort_values('AIC')
+        # Re-order columns
+        self.statsPool = self.statsPool[['AIC', 'AR2', 'R2', 'cvrmse',
+                                         'postDiff', 'var']]
+
+    def plot_pool(self, number=5):
+        """ Plots the top 5 models after run_all"""
+        for i in range(number):
+            modVars = self.statsPool['var'].iloc[i]
+            tempMod = self._modelPool[modVars]
+
+            tempMod.model_plot2()
+            tempMod.stats_plot()
+            plt.show()
+
+
+class remodel():
+
+    """This class opens a saved 'archived' model and recombines all of the
+    input parameters to create the ols_model again. Once reborn, this class
+    can also extend the data using PI to calculate more of the post period
+    including, savings
+
+    """
 
     @staticmethod
-    def k_test(pre, post, com, params, folds = 4):
+    def read_json_params():
+        """ Read previous models parameters from the saved json file"""
+        # read in Json params locally, split into two dicts
+        # return two objects
+
+        jsonName = 'all Params.json'
+        with open(jsonName) as f:
+            data = json.load(f)
+
+        return data
+
+    @staticmethod
+    def read_raw_data():
+        """ Read previous model's rawData file """
+        # find raw data locally, load into pd.dataframe
+        # return data
+
+        fileName = 'raw data.xlsx'  # TODO: File name will be flexible (right?)
+        df = pd.read_excel(fileName, index_col=0,
+                           parse_dates=True, infer_datetime_format=True)
+
+        return df
+
+    @staticmethod
+    def extend_data_with_pi(data, endDate='y', tags=[]):
+        """ Grabs more PI data for the commodity of interest up to the
+        specified date
+
+
+        # TODO: write me
         """
-        Split data in folds number of folds
-        run linear model on large slice
-        make prediction of remaining slice
+        # Find last date in data, make that start date for datapull
+        startDate = data.index[-1] + pd.Timedelta('1h')
+        # Default end date to yesterday
 
-        compare all combinations
+        # Use column headings as tags
+        tags = list(data.columns)
+        # if custom tags, then pull those and replace columns??? (tricky)
 
-        ensure they're pretty consistent
-        report flags
+        pi = pi_client()
 
+        newData = pi.get_stream_by_point(tags, start=startDate,
+                                         end=endDate, interval='1h')
 
-        ## CHeck pretty rough, ask down how Kfold should be used (before/after all models?)
+        # Pull data, concat and return
+        combinedData = pd.concat([data, newData], axis=0)
+
+        return combinedData
+
+    @staticmethod
+    def DK_II(data, dataParams):
+        """
+        My numpydoc description of a kind
+        of very exhautive numpydoc format docstring.
+
+        Parameters
+        ----------
+        # TODO: WRITE ME first : array_like
+            the 1st param name `first`
+        second :
+            the 2nd param
+        third : {'value', 'other'}, optional
+            the 3rd param, by default 'value'
+
+        Returns
+        -------
+        string
+            a value in a string
+
+        Raises
+        ------
+        KeyError
+            when a key error
+        OtherError
+            when an other error
+        """
+        dataParams['dateRanges'][3] = data.index[-1].strftime('%Y-%m-%d')
+#        dataParams['IQRmult'] = 6
+
+#        return dataParams
+        dk = data_keeper(data, dataParams)
+
+        dk.default_clean()
+
+        # make DK
+        # Default Clean
+        # Defualt plots
+        # return DK
+        return dk
+
+    @staticmethod
+    def MC_II(pre, post, modelParams):
+        """
+        My numpydoc description of a kind
+        of very exhautive numpydoc format docstring.
+
+        Parameters
+        ----------
+        # TODO: WRITE ME first : array_like
+            the 1st param name `first`
+        second :
+            the 2nd param
+        third : {'value', 'other'}, optional
+            the 3rd param, by default 'value'
+
+        Returns
+        -------
+        string
+            a value in a string
+
+        Raises
+        ------
+        KeyError
+            when a key error
+        OtherError
+            when an other error
         """
 
-        kf = KFold(n_splits = folds, shuffle=True)
+        print(modelParams)
 
-        for train_index, test_index in kf.split(pre):
-            train, test = pre.iloc[train_index,:], pre.iloc[test_index,:]
+        mc = ols_model(pre, post, modelParams)
 
-            model = smf.ols(com + params, train).fit()
-            predicted = model.predict(test)
+        mc.calculate_kfold()
+        mc.calculate_vif()
 
-#            print()
-
-            print(mean_squared_error(test[com], predicted))
-            print('')
-            print(model.summary())
+        return mc
 
 
+# =============================================================================
+#--- Functions
+# =============================================================================
+
+def _create_new_save_directory(dirName=None, useDate=False, _index=None):
+    """Create new directory where the name and date and be specified
+    New directories are created recursively with a (#) appended to the name if
+    there is a name match
+
+    Parameters
+    ----------
+    dirName : str
+        the name of the directory to make
+    useDate : Bool (False)
+        True - Adds the '%Y-%m-%d_%H%M%S' strftime to the end of the dirName
+        False - only uses the dirName to make the new folder
+    _index : int (None)
+        Used to recusrively keep track of which folder number needs to be made
+        if this folder name is taken
+
+    Returns
+    -------
+    None - Creates a directory
+
+    Raises
+    ------
+
+    """
+
+    currentTime = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+
+    if dirName:
+        if useDate:
+            tryDir = "{}_{}".format(dirName, currentTime)
+        else:
+            tryDir = dirName  # pass
+    else:  # no dir name just becomes the date
+        tryDir = currentTime
+
+    try:
+        if _index:
+            mkdir("{} ({})".format(tryDir, _index))
+        else:
+            mkdir(tryDir)
+
+    except FileExistsError:
+        print('Warning: Folder {} ({}) already exists.'.format(tryDir, _index))
+
+        if _index:
+            _index += 1
+        else:
+            _index = 1
+
+        _create_new_save_directory(dirName=dirName, useDate=useDate,
+                                   _index=_index)
+
+    return tryDir
 
 
-    def show():
-        """
-        Will plot data in many different ways
-        "raw"
-        "clean"
-        "pre"
-        "post"
-        """
+def _interval_checker(df, unit='min', silenced=True):
+    """
+    Copied from mypy on 08/23/2018 to reduce imports
 
-        if showWhat == 'clean':
-            # plot the cleaning step again
+    Calculate the intervalsize of a time series dataset and returns
+    the mode() of the index timedeltas in specified unit eg: 60.0
+
+    #TODO: Docstring me - implement me in the HDH regieme
+    """
+
+    if isinstance(df, pd.DataFrame):
+        if isinstance(df.index, pd.core.indexes.datetimes.DatetimeIndex):
             pass
+        else:
+            raise TypeError("df must have datetimeIndex")
+    else:
+        raise TypeError("input must be of type: pandas DataFrame")
 
-        if showWhat == 'pre':
-            # plot the pre dat
-            pass
+    idx = df.index
+    deltaList = [idx[i] - idx[i - 1] for i in range(1, len(idx))]
+    s = pd.Series(deltaList)
+    valueCounts = s.value_counts()
 
-        # Etc...
+    ratio = float(valueCounts[0]) / float(valueCounts.sum())
+    if ratio < 0.985:
+        print("Warning: >1.5% of intverals not in mode() of intervals")
+        print("{0:.2f}% ratio\n".format(100 * (1 - ratio)))
+        print(valueCounts)
 
-#==============================================================================
-# TESTS
-#==============================================================================
+    if unit.lower() in ['m', 'min', 'minute', 'minutes']:
+        denominator = 60
+    elif unit.lower() in ['h', 'hr', 'hour', 'hours']:
+        denominator = 3600
+    elif unit.lower() in ['d', 'dy', 'day', 'days']:
+        denominator = 86400
 
-def dc_test_init(data):
-    '''
-    basic functionality test
+    timeDelta = valueCounts.index[0]
+    output = timeDelta.total_seconds() / denominator
 
-         IQRmult = 3,
-         IQR = 'y',
-         floor = 0,
-         ceiling = 10000,
-         resampleRate = 'D',
-         verbosity = 2,
-         sliceType = 'half',
-         midDate = None,
-         dateRanges = None,
-         OATsource = 'file',
-         OATname = None
-    '''
-    print('dc_test_init')
-    inputDict = {'IQRmult' : 3.0, 'floor' : 0, 'ceiling': 10000, 'IQR' : 'y',
-             'resampleRate' : 'H',
-             'verbosity' : 3,
-             'sliceType' : 'ranges', #half, middate, ranges
-             'midDate' : '2018-03-01', #only needed with sliceType : 'middate'
-             'dateRanges' : ['2016-01-01','2017-01-01','2017-01-02','2018-01-01'],
-             'OATsource' : 'file', 'OATname' : None}
+    if silenced:
+        pass
+    else:
+        print('"{}" is {} {}'.format(timeDelta, output, unit))
 
-    dc = data_handler(data[data.columns[0]].to_frame(), inputDict)
-    print('dc_test_init passed')
-
-    return dc
+    return output
 
 
-def dc_test_cleaning(data):
-    '''
-    Turn this into a function to test
-    Test the manual cleaning suite by calling all cleaning functions here
+def _build_time_columns(dfIn, daytime=(8, 20)):
+    """
+    Function copied from mypy on 08/23/2018 to reduce imports
 
-    These functions should be the same as dc.default_clean()
+    This function will add many columns to the end of the dataframe which
+    contains information about the rows dateTime but split into columns
 
-    check pre post to verify all worked right
-    '''
+    year, month, dayofmonth, hour, minute, dayofweek, weekday, daytime,
+    saturday, sunday
+    """
+    df = dfIn.copy()
 
-    dc = dc_test_init(data)
-    dc._resample()
-    dc.remove_outliers()
-    dc.add_degree_hours()
-    dc.data_slice()
+    df['year'] = df.index.year
+    df['month'] = df.index.month
+    # added for mnv tool functionality
+    df['month'] = df['month'].astype('category')
+    df['dayofmonth'] = df.index.day
+    df['hour'] = df.index.hour
+    df['minute'] = df.index.minute
+    df['dayofweek'] = df.index.dayofweek
+    df['weekofyear'] = df.index.week
 
-    return dc
+    mask = (df['hour'] >= daytime[0]) & (df['hour'] < daytime[1])
+    df['daytime'] = 0
+    df.loc[mask, 'daytime'] = 1
 
-def mc_test_single(data):
+    mask = df['dayofweek'] < 5
+    df['weekday'] = 0
+    df.loc[mask, 'weekday'] = 1
+
+    mask = df['dayofweek'] == 5
+    df['saturday'] = 0
+    df.loc[mask, 'saturday'] = 1
+
+    mask = df['dayofweek'] == 6
+    df['sunday'] = 0
+    df.loc[mask, 'sunday'] = 1
+
+    return df
+
+
+def _prove_completion(mc):
+    """ Checks if certain items exist in model object 'mc'"""
+
+    completed = {}
+
+    try:
+        assert(isinstance(mc.vif, pd.DataFrame))
+        completed['VIF'] = True
+    except AttributeError:
+        print('create_archive warning: VIF has not been run')
+        completed['VIF'] = False
+    try:
+        assert(isinstance(mc.kfoldStats, pd.DataFrame))
+        completed['kfold'] = True
+    except AttributeError:
+        print('create_archive warning: kfold has not been run')
+        completed['VIF'] = False
+
+    return completed
+
+
+def _calculate_degree_hours(oatData=None, by='day', cutoff=65):
+    """ Copied this function from mypy on 08/23/2018 to reduce imports
+        '''
+        Calculate the HDH or CDH in a day or month as a standalone action
+        Source of data is always OAT master file
+        '''
     """
 
+    if isinstance(oatData, pd.DataFrame) or isinstance(oatData, pd.Series):
+        if isinstance(oatData, pd.Series):
+            df = oatData.to_frame()
+        else:
+            df = oatData
+        df.columns = ['OAT']
+        print('OAT supplied with df')
+    else:
+
+        oatPath = path.join(pathPrefix, '..', 'mypy', 'data',
+                            'OATmaster.csv')
+        print('OAT being loaded from master file {}'.format(oatPath))
+
+        df = pd.read_csv(oatPath, index_col=0, parse_dates=True,
+                         infer_datetime_format=True)
+
+    # always resample data to hour for HDH calcs
+    df = df.resample('1H').mean()
+    # Build HDH/CDH columns
+    hours = pd.DataFrame()
+    hours['HDH'] = cutoff - df['OAT']
+    hours['CDH'] = df['OAT'] - cutoff
+    hours.index = df.index
+    hours[hours < 0] = 0
+
+    # Resample again with sum() if needed
+    if by.lower() == 'day' or by.lower() == 'd':
+        hours = hours.resample('1D').sum()
+    elif by.lower() == 'month' or by.lower() == 'm':
+        hours = hours.resample('1M').sum()
+    elif by.lower() == 'hour' or by.lower() == 'h':
+        pass
+    else:
+        print("WARNING: calculate_degree_days didn't get by=H, D or M")
+    return hours
+
+
+def create_archive(dk, mc,
+                   saveFigs=False,
+                   copyRemodel=False,
+                   customDirectoryName=None,
+                   centralize=False):
     """
-    ## INPUT PARAMS
-    inputDict = {'IQRmult' : 4.0,
-                 'IQR' : 'y',
-                 'resampleRate' : 'D',
-                 'verbosity' : 3,
-                 'sliceType' : 'ranges', #half, middate, ranges
-                 'midDate' : '2018-03-01', #only needed with sliceType : 'middate'
-                 'dateRanges' : ['2016-05-01','2016-08-01','2016-08-02','2018-01-01'],
-                 'OATname' : None,
-                 'OATsource' : 'file'} #only needed with sliceType : 'ranges'}
+    Saves many files to archive a data/model run.
 
-    dc = data_handler(data, inputDict)
-    dc.default_clean()
+    These items are used for compiling the M&V report
+    and re-running models using the __Model__ notebook
 
-    mod1 = ols_model(dc.pre, dc.post, 'CDH + HDH + C(weekend)')
-#    mod1.split_test_train(how='simple')
-    mod1.model_plot()
-#    mod1.savings_plot(yaxis='dollars')
-    mod1.stats_plot()
-#
-    return mod1, dc
+    Parameters
+    ----------
+    dk : instance of data_keeper
+        needed to extract the params
+    mc : instance of the ols_model class
+        needed to extract the vif/kfold/plots and params
+    saveFigs : Bool (False)
+        True - output selected plots as .pngs
+        False - no output plots
+    copyRemodel : Bool (False)
+        True - Create a copy of the reMnV.ipynb in the saveDirectory folder
+            :: used when creating a new model archive, not needed if using the
+            :: reMnV.ipynb
+        False - Do not copy the notebook template to saveDirectory
+    customDirectoryName : str (None)
+        If string supplied saveDirectory will be named customDir + date
+        if None - dk.com is used as folder name (dk.com)
+    centralize : bool (False)
+        Change to True when creating the end of fiscal year central results
+        goals:
+            1. save all savings data in a central spot?
+            2. Make a pdf for each line item
 
-def mc_test_all_linear(data):
+            3. TODO: other?
+
+    Returns
+    -------
+    None - However it may output a .png(s) .xlsx .json and .ipynb in a new dir
+
+    Raises
+    ------
+    None
     """
-    K fold test
-    """
-    ## INPUT PARAMS
-    inputDict = {'IQRmult' : 4.0,
-                 'IQR' : 'y',
-                 'resampleRate' : 'H',
-                 'verbosity' : 3,
-                 'sliceType' : 'half', #half, middate, ranges
-                 'midDate' : '2018-03-01', #only needed with sliceType : 'middate'
-                 'dateRanges' : ['2016-01-01','2017-01-01','2017-01-02','2018-01-01'],
-                 'OATname' : None,
-                 'OATsource' : 'file'} #only needed with sliceType : 'ranges'}
 
-    dc = data_handler(data, inputDict)
-    dc.default_clean()
+    if centralize:
+        centralDirectory = 'REPORT'
+        dirName = '{}/{}/{}'.format('..', centralDirectory, dk.com)
+    else:
+        dirName = dk.com
 
-    mc = many_ols(dc.pre, dc.post)
-    mc.run_all_linear()
+    if customDirectoryName:
+        saveDirectory = _create_new_save_directory(dirName=customDirectoryName,
+                                                   useDate=True)
+    else:
+        saveDirectory = _create_new_save_directory(dirName=dirName,
+                                                   useDate=True)
 
-    return mc, dc
+    # Check to see if VIF kfold and other functions are completed
+    # if not completed then they are ignored from the excel writer
+    completionDict = _prove_completion(mc)
 
+    # Write excel file
+    excelSaveString = '{}/{} results.xlsx'.format(saveDirectory,
+                                                  mc.com)
 
-if __name__ == "__main__":
+    writer = pd.ExcelWriter(excelSaveString, engine='xlsxwriter')
 
-    filePath = 'data/arc2yeardata.xlsx'
-    data = pd.read_excel(filePath,header=0, index_col=0, parse_dates=True)
-#    dc0 = dc_test_init(data)
-#    dc1 = dc_test_cleaning(data)
-    mod1, dc1 = mc_test_single(data[data.columns[1]])
-#    mc2, dc2 = mc_test_all_linear(data[data.columns[1]])
+    if completionDict['VIF']:
+        mc.vif.to_excel(writer, sheet_name='VIF')
 
-    pass
+    if completionDict['kfold']:
+        concatedKfold = pd.concat([mc.kfoldStats, mc.kfoldRelative], axis=1)
+        concatedKfold.to_excel(writer, sheet_name='Kfold')
+
+    # write ols_model.Fit().summary() in sections
+    # dfList is 3 seperate stats summaries, so we need to write them to the
+    # same sheet iteratively and increment the startrow by the shape + 1
+    dfList = pd.read_html(mc.Fit.summary().as_html())
+    startRow = 0
+
+    for df in dfList:
+        df.to_excel(writer, sheet_name='Summary', startrow=startRow,
+                    startcol=0, header=False, index=False)
+        startRow += df.shape[0] + 1
+
+    # Write all params into a json for reading .
+    # Necessary to access __dict_ since it contains the default/hidden params
+    allParams = {'dataParams': dk.params.__dict__,
+                 'modelParams': mc.params.__dict__}
+
+    with open('{}/all Params.json'.format(saveDirectory), 'w') as f:
+        json.dump(allParams, f, indent=4)
+
+    dk.rawData.to_excel('{}/raw data.xlsx'.format(saveDirectory))
+
+    if copyRemodel:
+        sourceName = 're-Model-MnV.ipynb'
+
+        copyfile(path.join(pathPrefix, 'src', sourceName),
+                 path.join(saveDirectory, sourceName))
+
+    # Output images
+    if saveFigs:
+        mc.mod1Plot.savefig('{}/Model plot.png'.format(saveDirectory))
+        mc.savingsPlot.savefig('{}/Savings plot.png'.format(saveDirectory))
