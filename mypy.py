@@ -49,7 +49,8 @@ from os import path
 from textwrap import wrap
 import matplotlib.pyplot as plt
 
-from PI_client2 import pi_client
+#from PI_client2 import pi_client
+from PI_Client.v2 import *
 
 path_prefix = path.dirname(path.abspath(__file__))
 

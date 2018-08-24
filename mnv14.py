@@ -143,7 +143,8 @@ import statsmodels.formula.api as smf
 
 from os import mkdir
 from datetime import datetime
-from PI_client2 import pi_client
+#from PI_client2 import pi_client
+from PI_Client.v2 import pi_client #latest verison of PI Client
 from mypy import build_time_columns, calculate_degree_hours, merge_oat
 
 from sklearn.model_selection import KFold
