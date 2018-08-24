@@ -1,3 +1,3 @@
-[submodule "PI_Clientv2"]
-	path = PI_Clientv2
+[submodule "PI_Client"]
+	path = PI_Client
 	url = https://github.com/aleman87/PI_clientv2.git
