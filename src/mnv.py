@@ -146,7 +146,9 @@ from os import path, mkdir
 from math import sqrt, floor
 from shutil import copyfile
 from datetime import datetime
-from PI_client import pi_client
+import sys
+sys.path.append("..")
+from PI_Client.v2_1 import pi_client
 
 from sklearn.model_selection import KFold
 from statsmodels.tools.tools import add_constant
@@ -1095,10 +1097,11 @@ class ols_model():
             }
 
         cols = ['Energy Difference', 'Dollar Difference', 'Start Date', 'End Date']
-        self.savingsSummary = round(
-            pd.DataFrame.from_dict(savingsDict,
-                                   columns=cols,
-                                   orient='index'), 2)
+        #self.savingsSummary = round(
+        #    pd.DataFrame.from_dict(savingsDict,
+        #                           columns=cols,
+        #                           orient='index'), 2)
+        self.savingsSummary = pd.DataFrame.from_dict(savingsDict, columns = cols, orient = 'index').round(2)
 
     def calculate_vif(self):
         """
