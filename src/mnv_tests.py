@@ -126,14 +126,12 @@ def test_jupyter(dk, mod):
     mod.model_plot()
     mod.calculate_vif()
     mod.calculate_kfold()
-    mod.calculate_uncertainty()
+    mod.calculate_F_uncertainty()
 
     mod.savings_plot()
 
-    mod.calculate_tmy_models()
+    mod.generate_savings_summary()
     mod.plot_tmy_comparison()
-
-    mod.compile_savings()
 
 
 @timeit
@@ -175,10 +173,8 @@ def test():
 def test_tmy(dk, mod):
 #    dk._outlier_plot()
 #    dk._resampled_plot()
-    mod.calculate_uncertainty()
-    mod.calculate_tmy_models()
-    mod.compile_savings()
-    mod.plot_tmy_comparison()
+#    print(mod._generate_savings_intervals())
+    mod.generate_savings_summary()
 
     return dk, mod
 
@@ -190,7 +186,7 @@ def generic_loader(data):
                  'resampleRate': 'D',  # 'D' for daily 'H' for hourly
                  'sliceType': 'ranges',  # half, middate, ranges
                  'midDate': '2017-01-01',
-                 'dateRanges': ['2016-10-18', '2017-10-18', '2017-11-05', '2018-02-11'],
+                 'dateRanges': ['2017-01-01', '2018-01-01', '2018-01-11', '2018-06-20'],
                  'OATsource': 'file',  # 'self' or 'file'
                  'OATname': 'OAT',  #
                  }
@@ -214,10 +210,11 @@ if __name__ == "__main__":
     filePath = '../data/pes kbtu.xlsx'
     data = pd.read_excel(filePath, header=0, index_col=0, parse_dates=True)
     dk, mod = generic_loader(data)
-#
 
 #    mod = test_kfold(dk, mod)
 #    dk, mod = test_archive(dk, mod)
 #    dk, mod = test_tmy(dk, mod)
     test_jupyter(dk, mod)
     pass
+
+

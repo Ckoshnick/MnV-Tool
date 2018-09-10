@@ -163,7 +163,7 @@ sns.set()  # Enable to turn on seaborn plotting
 figW = 18
 figH = 6
 
-version = 'Version 1.5'
+version = 'Version 1.6'
 
 # =============================================================================
 # --- Classes
@@ -955,8 +955,7 @@ class ols_model():
         self.preStart = pre.index[0]
         self.preEnd = pre.index[-1]
         self.postStart = post.index[0]
-        self.YTD = post.index[-1]  # Same as postEnd
-        self.FYEnd = self._find_FYE(self.postStart)
+        self.postEnd = post.index[-1]  # Same as postEnd
         self.oneYearEnd = self.postStart + pd.offsets.DateOffset(years=1)
 
         self.dataInterval = _interval_checker(pre, silence=True,
@@ -993,14 +992,9 @@ class ols_model():
                 ).sort_index()
 
         self._calculate_diff_and_sum(
-                self.data['preModel'][self.postStart:self.YTD],
-                self.data['post'][self.postStart:self.YTD],
+                self.data['preModel'][self.postStart:self.postEnd],
+                self.data['post'][self.postStart:self.postEnd],
                 assignment='post')
-
-        # F is fraction of savings (postDiff / postModel expected), can be +/-
-        self.F = (
-            self.postDiffSum
-            / self.data['preModel'][self.postStart:self.YTD].cumsum()[-1])
 
         # Variables to be filled when needed, all checked if exist first
         self.postModel = None
@@ -1020,9 +1014,16 @@ class ols_model():
             print('Warning: {} already in self.data\n'
                   'Unable to _custom_join()'.format(newName))
         else:
+            # Reset index, join re-set index to avoid index overlap error
             self.data = self.data.join(newCol, how='outer')
 
-    def _find_FYE(self, date):
+#               TODO: This below comment should fix the overlap problem
+#            self.data = self.data.reset_index().join(newCol.reset_index(),
+#                                         on='index', how='outer')
+#            self.data = self.data.drop_duplicates(cols='index')
+#            self.data.set_index('index', inplace=True)
+
+    def _find_FYE(self, date, end=True):
         """ Finds next date of the 4/1/yyyy FYE based on input date"""
 
         year = int(date.year)
@@ -1030,9 +1031,12 @@ class ols_model():
 
         if month >= 4:
             year += 1
-        else:
+        if end:
             pass
-        endDate = "{}-04-01".format(year)
+        else:
+            year -= 1
+
+        endDate = pd.to_datetime("{}-04-01".format(year))
 
         return endDate
 
@@ -1056,49 +1060,108 @@ class ols_model():
         """ A method to calculate the diff columns and the cumsum of the diff
         column inspired by the following (retired) statement.
 
-        self.data['postDiff'] = (self.data['preModel'][self.postStart:self.YTD]
+        self.data['postDiff'] = (self.data['preModel'][self.postStart:self.postEnd]
                                  - self.data['post'])
         """
 
-        diff = actual - expected
+        diff = expected - actual
 
+        # XXX: Remove this function once new savings suite complete (?)
         # Hack: .dropna() fixes issue where OAT (and thus HDD) is missing
         if assignment == 'tmy':
             self._custom_join(diff, newName='tmyDiff')
-            self.tmyFYESum = diff[self.YTD:self.FYEnd].cumsum()[-1]
+            self.tmyFYESum = diff[self.postEnd:self.FYEnd].cumsum()[-1]
             self.tmyYearSum = diff[self.FYEnd:self.oneYearEnd].cumsum()[-1]
         elif assignment == 'post':
             cumsum = diff.cumsum().dropna()[-1]
             self._custom_join(diff, newName='postDiff')
             self.postDiffSum = cumsum
 
-        # Aggregate values (sums and such)
-        self.postDiffSum = self.data['postDiff'].cumsum().dropna()[-1]
 
-    def compile_savings(self):
+    def _generate_savings_intervals(self):
+        """ Using the postStart and postEnd dates, determine where the FY and
+        annual date intervals fall"""
 
-        rate = self.params.commodityRate
+        PE = self.postEnd
+        PS = self.postStart
+#        print(PS, PE)
+        oneYear = pd.offsets.DateOffset(years=1)
 
-        savingsDict = {
-#            'fractionSavings': [self.F * 100,
-#                                self.uncertainty * 100,
-#                                self.postStart, self.YTD],
-            'PostActual': [self.postDiffSum,
-                           self.postDiffSum * rate,
-                           self.postStart, self.YTD],
-            'tmyFYE': [self.tmyFYESum,
-                       self.tmyFYESum * rate,
-                       self.YTD, self.FYEnd],
-            'tmyAnnual': [self.tmyYearSum,
-                          self.tmyYearSum * rate,
-                          self.FYEnd, self.oneYearEnd],
-            }
+        # find last FY dates
+        FY11 = self._find_FYE(PE - oneYear, end=False)
+        FY12 = FY11 + oneYear
+        # Find this FY dates
+        FY21 = FY12  # + a step?
+        FY22 = FY12 + oneYear
 
-        cols = ['Energy Difference', 'Dollar Difference', 'Start Date', 'End Date']
-        self.savingsSummary = round(
-            pd.DataFrame.from_dict(savingsDict,
-                                   columns=cols,
-                                   orient='index'), 2)
+#        print(FY11, FY12, FY21, FY22)
+
+        # Find Last year's dates
+        yearDiff = PE.year - self.postStart.year
+        PSvirt = PE - pd.offsets.DateOffset(years=yearDiff)
+
+        if PSvirt < PS:
+            offset = -1
+        if PSvirt >= PS:
+            offset = 0
+
+        A11 = PS + pd.offsets.DateOffset(years=(yearDiff + offset - 1))
+        A12 = A11 + oneYear
+        # Find this year's dates
+        A21 = A12  # + a step?
+        A22 = A12 + oneYear
+
+#        print(A11, A12, A21, A22)
+        validation = dict(lastFY=PS < FY12,
+                          lastYear=PE > (PS + oneYear))
+
+        if PS > FY11 and validation['lastFY']:
+            FY11 = PS
+        else:
+            FY11 = None
+            FY12 = None
+
+        if PS > FY21:
+            FY21 = PS
+
+        if not validation['lastYear']:
+            A11 = None
+            A12 = None
+
+        index = ['Last FY', 'This FY', 'Last Year', 'This Year', 'Total']
+        cols = ['Actual', 'TMY prediction', 'Combined', 'Start', 'Middle', 'End']
+
+        df = pd.DataFrame(columns=cols, index=index)
+        df['Start'] = pd.Series(data=[FY11, FY21, A11, A21, PS], index=index)
+        df['Middle'] = pd.Series(data=['', PE, '', PE, PE], index=index)
+        df['End'] = pd.Series(data=[FY12, FY22, A12, A22, PE], index=index)
+
+        self.savingsSummary = df
+
+    def generate_savings_summary(self):
+        """ Compile the actual and or tmy savings values """
+
+        self.calculate_tmy_models()
+        self._generate_savings_intervals()
+        PE = self.postEnd
+
+        for index, row in self.savingsSummary.iterrows():
+#            print(row)
+            if not row['Start']:
+                continue
+
+            if PE > row['Start'] and PE <= row['End']:
+                row['Actual'] = self.data['postDiff'][row['Start']:PE].cumsum()[-1]
+                row['TMY prediction'] = self.data['tmyDiff'][PE:row['End']].cumsum()[-1]
+            elif PE > row['End']:
+                row['Actual'] = self.data['postDiff'][row['Start']:row['End']].cumsum()[-1]
+                row['TMY prediction'] = row['TMY prediction']
+
+            self.savingsSummary.loc[index] = row
+
+        self.savingsSummary[['Actual', 'TMY prediction']] *= self.params.commodityRate
+
+        self.savingsSummary['Combined'] = self.savingsSummary[['Actual','TMY prediction']].sum(axis=1).round(0)
 
     def calculate_vif(self):
         """
@@ -1223,7 +1286,7 @@ class ols_model():
 
         self.kfoldStats = kfoldStats
 
-    def calculate_uncertainty(self, confidence=90):
+    def calculate_F_uncertainty(self, confidence=90):
         """
         Following ASHRAE Guideline 14-2002
         "Measurement of Energy and Demand Savings"
@@ -1244,6 +1307,9 @@ class ols_model():
             a percentage of the savings
 
         """
+        self.F = (self.postDiffSum
+                  / self.data['preModel'][self.postStart:self.postEnd].cumsum()[-1])
+
         t = scipy.stats.t.ppf(confidence/100, len(self.post))
 
         numer = t * 1.26 * self.Fit.cvrmse * sqrt(len(self.train) + 2)
@@ -1322,23 +1388,7 @@ class ols_model():
 
         self._folds = [x for x in kf.split(self.pre)]
 
-
-    # TODO: TMY OVERHAUL
-    # Creating a single collector DF for pre,post,calc,diff,tmy,tmy2,tmydiff
-    # Calculate TMY and normal savings on their own functions
-        # When calculating TMY savings append them to the collector DF
-    # When calculating normal savings append them to the collector DF
-
-    # Calculate uncertanty in savings, add that in with the summary
-    # Find a way to work the Cumsum values back into the Mix {dict?}
-    # Saving summary to include _Actual YTD_ Uncertainty, TMY FYE, TMY oneyearend
-
-    # TODO: Change plots to take the self.dates to make cumsum etc...
-    # TODO: Clean up model plot to be generic
-    # TODO: Clean up plotting regieme to make Savings plot work for any data?
-
-
-    def _get_tmy_data(self, startDate='pre', endDate='oneYear'):
+    def _get_tmy_data(self):
         """ Pull the TMY data from the PI tag 'Future_TMY' and store it to be
         used for calculating the TMY calcs
 
@@ -1365,41 +1415,18 @@ class ols_model():
         None
         """
 
+        startDate = self.preStart
+        endDate = self.oneYearEnd
+
         pi = pi_client()
-
-        # Dealing with startDate
-        if startDate == 'pre':
-            startDate = self.preStart.strftime('%Y-%m-%d')
-        else:
-            startDate = startDate
-
-        # Dealing with endDate
-        if endDate == 'fiscal':
-            endDate = self.FYEnd.strftime('%Y-%m-%d')
-
-        elif endDate == 'oneYear':
-            endDate = self.oneYearEnd.strftime('%Y-%m-%d')
-
-        elif len(endDate) == 4:
-            try:
-                if (int(endDate) - 2018) < 50:
-                    year = int(endDate)
-                    endDate = "{}-01-01".format(year + 1)
-            except ValueError:
-                print('Cant convert {} to int'.format(endDate))
-        else:
-            endDate = endDate
-
-        print('Date range used for TMY'
-              ' analysis start: {} and end: {}'.format(startDate, endDate))
 
         tmy = pi.get_stream_by_point(['Future_TMY'], start=startDate,
                                      end=endDate, interval='1h')
 
         hours = _calculate_degree_hours(tmy, by=self.dataInterval)
 
-        hours['HDH2'] = hours['HDH'] ** 2
-        hours['CDH2'] = hours['CDH'] ** 2
+#        hours['HDH2'] = hours['HDH'] ** 2
+#        hours['CDH2'] = hours['CDH'] ** 2
 
         # TODO: rename TMY to TMYDH? or something that explains there is no OAT, or program the OAT back in? Do we really want the OAT since it is going to be mean() or sum()?
         self.tmy = hours
@@ -1420,7 +1447,7 @@ class ols_model():
 
         self._custom_join(tmyPost)
 
-    def calculate_tmy_models(self, startDate='pre', endDate='oneYear'):
+    def calculate_tmy_models(self):
         """ This function calculates the tmy pre and post models, then finds
         the difference between them
 
@@ -1450,15 +1477,13 @@ class ols_model():
                                      data=self.post)
 
         if self.tmy is None:  # Set self.tmy = None to reset lockout
-            self._get_tmy_data(startDate=startDate, endDate=endDate)
+            self._get_tmy_data()
             self.tmy = _build_time_columns(self.tmy)
 
             self._make_tmy_post()
             self._make_tmy_pre()
 
-        # Moving calculation to new functino _calculate_Diffandsum
-        self._calculate_diff_and_sum(self.data['tmyPre'], self.data['tmyPost'],
-                                     assignment='tmy')
+        self.data['tmyDiff'] = - self.data['tmyPost'] + self.data['tmyPre']
 
     def plot_tmy_comparison(self):
         """
@@ -1502,7 +1527,7 @@ class ols_model():
         plt.subplot2grid((3, 1), (1, 0), colspan=1)
 
         plt.plot(self.data['post'], label='actual', color='k')
-        plt.plot(self.data['tmyPost'][self.postStart:self.YTD],
+        plt.plot(self.data['tmyPost'][self.postStart:self.postEnd],
                  label='tmy_Post_model', color=_color, linestyle=_style)
 
         plt.ylabel(self.com)
@@ -1729,14 +1754,14 @@ class ols_model():
         savingsPos = ydata[ydata >= 0]
         savingsNeg = ydata[ydata < 0]
 
-        plt.plot(savingsPos, color='r', linestyle='', marker='.',
+        plt.plot(savingsPos, color='#76cd26', linestyle='', marker='.',
                  markersize=pointSize)
-        plt.plot(savingsNeg, color='#76cd26', linestyle='', marker='.',
+        plt.plot(savingsNeg, color='r', linestyle='', marker='.',
                  markersize=pointSize)
 
 #        self.postTest.plot(label='model')
         plt.title('Savings predicted by ' + self.params.varString)
-        plt.ylabel('Difference {}'.format(ylab))
+        plt.ylabel('Difference\n{}'.format(ylab))
 #        plt.legend()
 
         # Plot 2 - savings cumulative
@@ -1747,18 +1772,18 @@ class ols_model():
         cumPos = cumulative[cumulative >= 0]
         cumNeg = cumulative[cumulative < 0]
 
-        plt.plot(cumPos, color='r', linestyle='', marker='.',
+        plt.plot(cumPos, color='#76cd26', linestyle='', marker='.',
                  markersize=pointSize)
-        plt.plot(cumNeg, color='#76cd26', linestyle='', marker='.',
+        plt.plot(cumNeg, color='r', linestyle='', marker='.',
                  markersize=pointSize)
-        plt.ylabel('Cumulative Difference'.format(ylab))
+        plt.ylabel('Cumulative\n{}'.format(ylab))
 #        plt.legend()
 
         plt.tight_layout()
         fig.subplots_adjust(hspace=0.2)
 
         self.savingsPlot = fig
-
+        plt.show()
 
 class many_ols():
     """
@@ -1999,7 +2024,7 @@ class remodel():
         OtherError
             when an other error
         """
-        # Change the self.YTD variable to the most recent day in the data
+        # Change the self.postEnd variable to the most recent day in the data
         dataParams['dateRanges'][3] = data.index[-1].strftime('%Y-%m-%d')
 #        dataParams['IQRmult'] = 6
 
@@ -2232,8 +2257,14 @@ def _prove_completion(mc):
         assert(isinstance(mc.savingsSummary, pd.DataFrame))
         completed['savings'] = True
     except AttributeError:
-        print('create_archive warning: compile savings has not been run')
+        print('create_archive warning: generate_savings_summary has not been run')
         completed['savings'] = False
+    try:
+        assert(isinstance(mc.F, float))
+        completed['uncertainty'] = True
+    except AttributeError:
+        print('create_archive warning: uncertainty has not been run')
+        completed['uncertainty'] = False
 
     return completed
 
@@ -2269,6 +2300,9 @@ def _calculate_degree_hours(oatData=None, by='day', cutoff=65):
     hours['CDH'] = df['OAT'] - cutoff
     hours.index = df.index
     hours[hours < 0] = 0
+
+    hours['CDH2'] = hours['CDH'] ** 2
+    hours['HDH2'] = hours['HDH'] ** 2
 
     # Resample again with sum() if needed
     if by.lower() == 'day' or by.lower() == 'd':
@@ -2358,6 +2392,11 @@ def create_archive(dk, mc,
 
     if completionDict['savings']:
         mc.savingsSummary.to_excel(writer, sheet_name='savings')
+
+    if completionDict['uncertainty']:
+        df = pd.DataFrame(index=['Fraction Savings', 'Uncertainty'],
+                          data=[mc.F, mc.uncertainty])
+        df.to_excel(writer, sheet_name='uncertainty')
 
     # write ols_model.Fit().summary() in sections
     # dfList is 3 seperate stats summaries, so we need to write them to the
