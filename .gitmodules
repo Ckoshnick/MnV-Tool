@@ -1,0 +1,3 @@
+[submodule "src/PI_Client"]
+	path = src/PI_Client
+	url = https://github.com/aleman87/PI_client.git

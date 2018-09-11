@@ -146,7 +146,7 @@ from os import path, mkdir
 from math import sqrt, floor
 from shutil import copyfile
 from datetime import datetime
-from PI_client import pi_client
+from PI_Client import v2_1
 
 from sklearn.model_selection import KFold
 from statsmodels.tools.tools import add_constant
@@ -159,11 +159,12 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 pathPrefix = path.dirname(path.abspath(__file__))
 plt.rcParams.update({'figure.max_open_warning': 0})
 sns.set()  # Enable to turn on seaborn plotting
+pi = v2_1.pi_client()
 
 figW = 18
 figH = 6
 
-version = 'Version 1.6'
+version = 'Version 1.6.1'
 
 # =============================================================================
 # --- Classes
@@ -1418,8 +1419,6 @@ class ols_model():
         startDate = self.preStart
         endDate = self.oneYearEnd
 
-        pi = pi_client()
-
         tmy = pi.get_stream_by_point(['Future_TMY'], start=startDate,
                                      end=endDate, interval='1h')
 
@@ -1987,7 +1986,6 @@ class remodel():
 
         # Pull data
         # Refactor a single pi_client into the data stuff, source? ?
-        pi = pi_client()
         newData = pi.get_stream_by_point(tags, start=startDate,
                                          end=endDate, interval='1h')
         # TODO: add PI failure exception
