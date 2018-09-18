@@ -183,11 +183,11 @@ def test_tmy(dk, mod):
 def generic_loader(data):
     inputDict = {'IQRmult': 3.0,
                  'IQR': True,
-                 'resampleRate': 'D',  # 'D' for daily 'H' for hourly
+                 'resampleRate': 'H',  # 'D' for daily 'H' for hourly
                  'sliceType': 'ranges',  # half, middate, ranges
                  'midDate': '2017-01-01',
                  'dateRanges': ['2017-01-01', '2018-01-01', '2018-01-11', '2018-06-20'],
-                 'OATsource': 'file',  # 'self' or 'file'
+                 'OATsource': 'pi',  # 'self' or 'file' or 'pi'
                  'OATname': 'OAT',  #
                  }
 
@@ -199,7 +199,7 @@ def generic_loader(data):
                  'randomState': None,
                  'testSize': 0.2,
                  'commodityRate': 0.056,
-                 'varPermuteList': ['', 'C(weekday)', 'C(month)']}
+                 'varPermuteList': ['', 'CDH', 'HDH']}
 
     mod = mnv.ols_model(dk.pre, dk.post, modelDict)
 
@@ -207,8 +207,8 @@ def generic_loader(data):
 
 
 if __name__ == "__main__":
-    filePath = '../data/pes kbtu.xlsx'
-    data = pd.read_excel(filePath, header=0, index_col=0, parse_dates=True)
+#    filePath = '../data/pes kbtu.xlsx'
+#    data = pd.read_excel(filePath, header=0, index_col=0, parse_dates=True)
     dk, mod = generic_loader(data)
 
 #    mod = test_kfold(dk, mod)

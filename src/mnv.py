@@ -121,7 +121,6 @@ known issues:
         how OAT is turned into degree days (eg can not do a 3hr long interval)
 
 
-
 Last update 8/2/18 - koshnick
 """
 
@@ -160,11 +159,12 @@ pathPrefix = path.dirname(path.abspath(__file__))
 plt.rcParams.update({'figure.max_open_warning': 0})
 sns.set()  # Enable to turn on seaborn plotting
 pi = v2_1.pi_client()
+piOATpoint = 'aiTIT4045'
 
 figW = 18
 figH = 6
 
-version = 'Version 1.6.1'
+version = 'Version 1.6.2'
 
 # =============================================================================
 # --- Classes
@@ -253,7 +253,7 @@ class DataParameters():
                  sliceType='half',
                  midDate=None,
                  dateRanges=None,
-                 OATsource='file',
+                 OATsource='pi',
                  OATname=None):
 
         self.column = column
@@ -320,20 +320,28 @@ class data_keeper():
         # TODO: rename self.com to something more meaningful
         self._set_column(self.params.column)
 
-        # Use the OAT loaded into instance if present, otherwise OAT data will
-        # be loaded from OAT master
-        if self.params.OATsource == 'self':
-            self.OAT = data[self.params.OATname]
-
         # modifiedData is the working variable for all data modifications
         self.modifiedData = self.rawData[self.com].to_frame()
 
-        interval = _interval_checker(self.modifiedData, silence=False,
-                                     symbolOutput=True)
-        self.params.modifiedInterval = interval
+        self.params.modifiedInterval = (
+                _interval_checker(self.modifiedData, silence=False,
+                                     symbolOutput=True))
+
+        # Use the OAT loaded into instance if present, or PI data if selected
+        # otherwise OAT data will be loaded from OAT master
+        if self.params.OATsource == 'self':
+            self.OAT = data[self.params.OATname]
+        elif self.params.OATsource == 'pi':
+            self.OAT = (
+                pi.get_stream_by_point(piOATpoint,
+                                       start=self.modifiedData.index[0],
+                                       end=self.modifiedData.index[-1],
+                                       interval='1h'))
+            self.params.OATname = piOATpoint
 
     def undo(self):
         """ Allows the user to go back one step in data modification """
+        # TODO: Retired - remove
         self.modifiedData = self.restoreData.copy()
 
 # =============================================================================
@@ -512,6 +520,16 @@ class data_keeper():
                                             cutoff=cutoff)
 
         elif self.params.OATsource == 'self':
+            hours = _calculate_degree_hours(oatData=self.OAT,
+                                            by=self.params.modifiedInterval,
+                                            cutoff=cutoff)
+
+        # HACK: We're essentially turning the PI data in self, but not treating
+        # it that way with the following line. Refactor the 'self' handling
+        # to make this cleaner. Maybe if 'self' is used in params, but
+        # there is no actual oAT (how to check that ?? x.x) then we switch to
+        # pulling from aiTIT. or maybe it needs to be implemented like this..
+        elif self.params.OATsource == 'pi':
             hours = _calculate_degree_hours(oatData=self.OAT,
                                             by=self.params.modifiedInterval,
                                             cutoff=cutoff)
@@ -832,7 +850,8 @@ class ModelParameters():
                  randomState=4291990,
                  testSize=0.2,
                  commodityRate=0.056,
-                 varPermuteList=['', 'C(month)', 'C(weekday)']):
+                 varPermuteList=['', 'C(month)', 'C(weekday)'],
+                 defaultPermutes=None):
 
         self.var = var
         self._convert_var(var)
@@ -842,6 +861,7 @@ class ModelParameters():
         self.testSize = testSize
         self.commodityRate = commodityRate
         self.varPermuteList = varPermuteList
+        self.defaultPermutes = defaultPermutes
 
     def _convert_var(self, var):
         """
@@ -1817,36 +1837,53 @@ class many_ols():
         self.com = self.pre.columns[0]
         self.inputDict = inputDict
 
+        if 'defaultPermutes' in list(inputDict.keys()):
+            self.defaultPermutes = inputDict['defaultPermutes']
+        else:
+            self.defaultPermutes = [['CDH', 'CDH2', ''], ['HDH', 'HDH2', '']]
+
+
+    #TODO: Finish implementing the default permutes here so that I can pass
+    #  in more model vars to this thing
+
     def _var_permute(self):
         """ Creates all permutations of HDH or HDH2, CDH or CDH2, and the vars
         passed in to 'varPermuteList including ""
         """
 
-        CDHs = ['CDH', 'CDH2', '']
-        HDHs = ['HDH', 'HDH2', '']
+        if self.defaultPermutes:
+            permuteGroup = self.defaultPermutes
+        else:
+            permuteGroup = []
 
         if self.inputDict['varPermuteList']:
-            inputs = self.inputDict['varPermuteList']
+            permutes = self.inputDict['varPermuteList']
         else:
-            inputs = ['', 'C(month)', 'C(weekday)']
+            permutes = ['', 'C(month)', 'C(weekday)']
 
-        # Generate all permutations of the varPermuteList
-        els = []
-        for i in range(1, len(inputs)):
-            els += [list(x) for x in itertools.combinations(inputs, i)]
 
-        # Generate 'all' permutations with the constraints that CDH and CDH2
-        # Dont appear together etc..
+#        for i in range(1, len(inputs)):
+        #els += [list(x) for x in itertools.combinations(inputs, i)]
+
+        permutesList = []
+        for i in range(1, len(permutes)):
+            permutesList += [list(x) for x in itertools.combinations(permutes, i)]
+
+        for i, item in enumerate(permutesList):
+            permutesList[i] = " + ".join(item).strip(' +')
+
+        permuteGroup.append(permutesList)
+
         permutedList = []
-        for c in CDHs:
-            for h in HDHs:
-                for e in els:
-                    var = [c, h] + e
-                    permutedList.append(
-                            " + ".join(filter(None, var)).rstrip(' +'))
-
+        for item in list(itertools.product(*permuteGroup)):
+            permutedList.append(" + ".join(filter(None, item)).rstrip(' +'))
         # Remove the var combo where all options are ""
-        permutedList.remove('')
+
+#        print(permutedList)
+        try:
+            permutedList.remove('')
+        except ValueError:
+            pass
 
         return permutedList
 
@@ -2133,6 +2170,8 @@ def _create_new_save_directory(dirName=None, useDate=False, _index=None):
 
     return tryDir
 
+# TODO: Make inverval checker only run if needed, this will be a work around to
+    # avoid month issues. Or find a way that this function can recognize months
 
 def _interval_checker(df, unit='min', silence=True, symbolOutput=False):
     """
@@ -2183,10 +2222,15 @@ def _interval_checker(df, unit='min', silence=True, symbolOutput=False):
         print('Timedelta: "{}" is {} {}'.format(timeDelta, output, unit))
 
     if symbolOutput:
+        # HACK: This symbolic output only works if unit = 'min' so above
+        # The function forces unit to min
         symbolDict = {1: '1Min',
                       15: '15Min',
                       60: 'H',
-                      1440: 'D'}
+                      1440: 'D',
+                      44640: 'M',
+                      43200: 'M'
+                      }
 
         return symbolDict[int(output)]
 
