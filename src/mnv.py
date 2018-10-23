@@ -164,7 +164,7 @@ piOATpoint = 'aiTIT4045'
 figW = 18
 figH = 6
 
-version = 'Version 1.6.2'
+version = 'Version 1.6.3'
 
 # =============================================================================
 # --- Classes
@@ -316,6 +316,7 @@ class data_keeper():
             self.rawData = data.to_frame()
 
         self.rawData = data.copy()
+        self.rawData = self._drop_index_duplicates(self.rawData)
 
         # TODO: rename self.com to something more meaningful
         self._set_column(self.params.column)
@@ -400,6 +401,11 @@ class data_keeper():
         lower = round(Q1 - (self.params.IQRmult * IQR), 2)
 
         return upper, lower
+
+    def _drop_index_duplicates(self, df):
+        """ Remove duplicate time entries on the index """
+
+        return df.groupby(df.index).first()
 
     def remove_outliers(self, floor=None, ceiling=None, IQR=None):
         """
